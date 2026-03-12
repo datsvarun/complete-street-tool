@@ -1,0 +1,964 @@
+{
+  "standard": "IRC SP 118:2018",
+  "title": "Guidelines for Urban Roads and Streets",
+  "description": "Cross-section configurations for urban roads grouped by Right of Way (ROW) width",
+  "unit": "metres",
+  "total_configurations": 23,
+  "row_width_groups": [
+    {
+      "row_width_m": 4.0,
+      "street_configurations": [
+        {
+          "street_type_name": "Non-Motorized Transport (NMT) Street - 4m Pedestrian Path",
+          "street_category": "non_motorized_transport",
+          "variant": null,
+          "total_width_m": 4.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 2.5
+            },
+            {
+              "element": "MUZ",
+              "width_m": 1.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 6.0,
+      "street_configurations": [
+        {
+          "street_type_name": "6m Right of Way Mixed Street",
+          "street_category": "mixed_street",
+          "variant": null,
+          "total_width_m": 6.0,
+          "components": [
+            {
+              "element": "Buffer",
+              "width_m": 1.5
+            },
+            {
+              "element": "Mixed traffic lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Tree pit",
+              "width_m": 1.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 7.5,
+      "street_configurations": [
+        {
+          "street_type_name": "Non-Motorized Transport (NMT) Street - 7.5m Greenway",
+          "street_category": "non_motorized_transport",
+          "variant": null,
+          "total_width_m": 7.5,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 2.5
+            },
+            {
+              "element": "MUZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle track",
+              "width_m": 3.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 9.0,
+      "street_configurations": [
+        {
+          "street_type_name": "9m Right of way with footpath on one side",
+          "street_category": "local",
+          "variant": null,
+          "total_width_m": 9.0,
+          "components": [
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Mixed traffic lane",
+              "width_m": 4.5
+            },
+            {
+              "element": "Footpath with tree pits",
+              "width_m": 4.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 12.0,
+      "street_configurations": [
+        {
+          "street_type_name": "12m Right of way Mixed street (1)",
+          "street_category": "mixed_street",
+          "variant": 1,
+          "total_width_m": 12.0,
+          "components": [
+            {
+              "element": "Livability island",
+              "width_m": 7.0
+            },
+            {
+              "element": "Mixed trraffic lane",
+              "width_m": 4.5
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            }
+          ]
+        },
+        {
+          "street_type_name": "12m Right of way Mixed street (2)",
+          "street_category": "mixed_street",
+          "variant": 2,
+          "total_width_m": 12.0,
+          "components": [
+            {
+              "element": "Footpath with tree pits",
+              "width_m": 3.5
+            },
+            {
+              "element": "Mixed traffic lane",
+              "width_m": 4.5
+            },
+            {
+              "element": "Parking",
+              "width_m": 2.0
+            },
+            {
+              "element": "Footpath",
+              "width_m": 2.0
+            }
+          ]
+        },
+        {
+          "street_type_name": "12m Right of way Mixed street (3)",
+          "street_category": "mixed_street",
+          "variant": 3,
+          "total_width_m": 12.0,
+          "components": [
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Mixed traffic lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Livability island",
+              "width_m": 5.0
+            },
+            {
+              "element": "Mixed traffic lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            }
+          ]
+        },
+        {
+          "street_type_name": "12m Right of way with footpaths on both side (1)",
+          "street_category": "local",
+          "variant": 1,
+          "total_width_m": 7.545,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 2.75
+            },
+            {
+              "element": "Parking",
+              "width_m": 2.0
+            },
+            {
+              "element": "Mixed traffic lane",
+              "width_m": 0.045,
+              "width_note": "Original value: 4.5cm"
+            },
+            {
+              "element": "Footpath",
+              "width_m": 2.75
+            }
+          ]
+        },
+        {
+          "street_type_name": "12m Right of way with footpaths on both side (2)",
+          "street_category": "local",
+          "variant": 2,
+          "total_width_m": 7.545,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 2.75
+            },
+            {
+              "element": "Mixed traffic lane",
+              "width_m": 0.045,
+              "width_note": "Original value: 4.5cm"
+            },
+            {
+              "element": "Livability island",
+              "width_m": 4.75
+            }
+          ]
+        },
+        {
+          "street_type_name": "12m Right of way with footpaths on both side (3)",
+          "street_category": "local",
+          "variant": 3,
+          "total_width_m": 12.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 3.0
+            },
+            {
+              "element": "MUZ",
+              "width_m": 2.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 6.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 15.0,
+      "street_configurations": [
+        {
+          "street_type_name": "15m Right of way with footpaths on both sides",
+          "street_category": "collector",
+          "variant": null,
+          "total_width_m": 15.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 2.0
+            },
+            {
+              "element": "MFZ",
+              "width_m": 2.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 7.0
+            },
+            {
+              "element": "Footpath with MUZ",
+              "width_m": 4.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 18.0,
+      "street_configurations": [
+        {
+          "street_type_name": "18m right of way with footpaths on both sides",
+          "street_category": "collector",
+          "variant": null,
+          "total_width_m": 18.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 3.5
+            },
+            {
+              "element": "Parking",
+              "width_m": 2.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 7.0
+            },
+            {
+              "element": "Footpath with MUZ",
+              "width_m": 5.5
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 24.0,
+      "street_configurations": [
+        {
+          "street_type_name": "24m right of way with symmetrical cycle tracks and footpaths (1)",
+          "street_category": "collector",
+          "variant": 1,
+          "total_width_m": 23.5,
+          "components": [
+            {
+              "element": "Footpath with Tree Pits",
+              "width_m": 3.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 5.5
+            },
+            {
+              "element": "Centre Verge",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 5.5
+            },
+            {
+              "element": "Footpath with Bus Stop",
+              "width_m": 3.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            }
+          ]
+        },
+        {
+          "street_type_name": "24m right of way with symmetrical cycle tracks and footpaths (2)",
+          "street_category": "collector",
+          "variant": 2,
+          "total_width_m": 24.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 3.0
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 3.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 6.5
+            },
+            {
+              "element": "Median",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 6.5
+            },
+            {
+              "element": "Footpath with Bus stop/MFZ",
+              "width_m": 3.5
+            }
+          ]
+        },
+        {
+          "street_type_name": "24m right of way without cycle tracks",
+          "street_category": "collector",
+          "variant": null,
+          "total_width_m": 24.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 3.0
+            },
+            {
+              "element": "MFZ",
+              "width_m": 2.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 6.5
+            },
+            {
+              "element": "Median",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 6.5
+            },
+            {
+              "element": "Footpath with Bus Stop/MFZ",
+              "width_m": 5.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 30.0,
+      "street_configurations": [
+        {
+          "street_type_name": "30 m right of way with side cycle tracks",
+          "street_category": "arterial",
+          "variant": null,
+          "total_width_m": 30.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 2.5
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Tree Line",
+              "width_m": 1.0
+            },
+            {
+              "element": "Parking/MFZ",
+              "width_m": 2.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 6.5
+            },
+            {
+              "element": "Median",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 6.5
+            },
+            {
+              "element": "Bus Stop/MFZ",
+              "width_m": 2.0
+            },
+            {
+              "element": "Tree Line",
+              "width_m": 1.0
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Footpath",
+              "width_m": 2.5
+            }
+          ]
+        },
+        {
+          "street_type_name": "30 m right of way with side cycle tracks",
+          "street_category": "arterial",
+          "variant": null,
+          "total_width_m": 30.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Tree Line",
+              "width_m": 1.0
+            },
+            {
+              "element": "Parking / MFZ",
+              "width_m": 2.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 7.0
+            },
+            {
+              "element": "Median",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 7.0
+            },
+            {
+              "element": "Bus Stop / MFZ",
+              "width_m": 2.0
+            },
+            {
+              "element": "Tree Line",
+              "width_m": 1.0
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Footpath",
+              "width_m": 2.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 45.0,
+      "street_configurations": [
+        {
+          "street_type_name": "45m right of way with future metro provision",
+          "street_category": "arterial_metro",
+          "variant": null,
+          "total_width_m": 45.0,
+          "components": [
+            {
+              "element": "Footpath (Recommended Metro Entry / Exit)",
+              "width_m": 6.65
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "MUZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "Space for future provision for metro structure",
+              "width_m": 2.7
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "Bus Stop / MUZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Footpath (Recommended Metro Entry / Exit)",
+              "width_m": 6.65
+            }
+          ]
+        },
+        {
+          "street_type_name": "45 m right of way with bus rapid transit (1)",
+          "street_category": "arterial_brt",
+          "variant": 1,
+          "total_width_m": 45.5,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 7.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 7.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Bus Rapid Transport Corridor",
+              "width_m": 7.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway (2 Lanes)",
+              "width_m": 7.0
+            },
+            {
+              "element": "Bus Stop / MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.5
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Footpath",
+              "width_m": 7.0
+            }
+          ]
+        },
+        {
+          "street_type_name": "45 m right of way with bus rapid transit (2)",
+          "street_category": "arterial_brt",
+          "variant": 2,
+          "total_width_m": 45.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 3.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 7.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Bus Rapid Transit (Station Access)",
+              "width_m": 3.5
+            },
+            {
+              "element": "Bus Rapid Transit (Platform)",
+              "width_m": 4.0
+            },
+            {
+              "element": "Bus Rapid Transit Corridor",
+              "width_m": 3.5
+            },
+            {
+              "element": "Bus Rapid Transit Corridor",
+              "width_m": 4.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 7.0
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Footpath",
+              "width_m": 3.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "row_width_m": 60.0,
+      "street_configurations": [
+        {
+          "street_type_name": "60 m right of way with space provision for metro rail and service lane",
+          "street_category": "arterial_metro",
+          "variant": null,
+          "total_width_m": 65.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 10.0
+            },
+            {
+              "element": "Parking",
+              "width_m": 2.0
+            },
+            {
+              "element": "Service Lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Tree Lane",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "Space for future provision for metro structure",
+              "width_m": 3.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 3.0
+            },
+            {
+              "element": "Tree Lane",
+              "width_m": 1.5
+            },
+            {
+              "element": "Service Lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Parking",
+              "width_m": 2.0
+            },
+            {
+              "element": "Footpath",
+              "width_m": 10.0
+            }
+          ]
+        },
+        {
+          "street_type_name": "60 m right of way with bus rapid transit and service lane (1)",
+          "street_category": "arterial_brt",
+          "variant": 1,
+          "total_width_m": 60.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 5.75
+            },
+            {
+              "element": "Parking",
+              "width_m": 2.0
+            },
+            {
+              "element": "Service Lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Bus Rapid Transit Corridor",
+              "width_m": 7.5
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Service Lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Parking",
+              "width_m": 2.0
+            },
+            {
+              "element": "Footpath",
+              "width_m": 5.75
+            }
+          ]
+        },
+        {
+          "street_type_name": "60 m right of way with bus rapid transit and service lane (2)",
+          "street_category": "arterial_brt",
+          "variant": 2,
+          "total_width_m": 60.0,
+          "components": [
+            {
+              "element": "Footpath",
+              "width_m": 3.5
+            },
+            {
+              "element": "Service Lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0,
+              "width_note": "2m\u20133m (range)"
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Bus Rapid Transit Station",
+              "width_m": 12.0,
+              "width_note": "3.5m+5m+3.5m (total 12.0m)"
+            },
+            {
+              "element": "Bus Rapid Transit Corridor",
+              "width_m": 4.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 1.0
+            },
+            {
+              "element": "Carriageway",
+              "width_m": 10.5
+            },
+            {
+              "element": "MFZ",
+              "width_m": 1.5
+            },
+            {
+              "element": "Cycle Track",
+              "width_m": 2.0
+            },
+            {
+              "element": "Buffer",
+              "width_m": 0.5
+            },
+            {
+              "element": "Service Lane",
+              "width_m": 3.0
+            },
+            {
+              "element": "Footpath",
+              "width_m": 3.5
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

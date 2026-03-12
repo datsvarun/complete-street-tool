@@ -4,3 +4,9 @@ The current development proposes to start work as a QGIS Plugin. The geospatial 
 
 The tool may later transition to a JS based Web-App with the underlying logic brought over to increase it's wider appeal as QGIS still proves to be a barrier for entry for a majority of the users.
 
+Using CAD tools is an equally bad choice as the only suitable option would be AutoCAD which lies under commercial licencing of Autodesk. 
+
+
+
+QGIS Workflow:
+
