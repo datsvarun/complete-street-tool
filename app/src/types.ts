@@ -3,7 +3,7 @@
 
 export type Stage = 'network' | 'sections' | 'junctions' | 'detailing' | 'export';
 
-export type Tool = 'select' | 'draw';
+export type Tool = 'select' | 'draw' | 'split';
 
 export type ComponentKind =
   | 'carriageway'
@@ -38,8 +38,59 @@ export interface CrossSection {
   components: SectionComponent[]; // ordered left → right across the street
 }
 
+export interface GraphNode {
+  id: string;
+  x: number;
+  y: number;
+}
+
 export interface StreetEdge {
   id: string;
-  points: number[];          // flat [x0, y0, x1, y1, ...] centerline vertices, metres
-  sectionId: string | null;  // assigned CrossSection, null = centerline only
+  a: string;                 // node id at points[0]
+  b: string;                 // node id at points[last]
+  points: number[];          // flat [x0, y0, ...] centerline, metres; endpoints mirror node coords
+  sectionId: string | null;
+  highway?: string;          // OSM highway class
+  name?: string;
+  oneway?: boolean;
+  carriagewayType?: 'undivided' | 'divided';
+  medianWidth?: number;      // estimate, metres (set by dual-carriageway merge)
+}
+
+/** The undoable graph core shared by all stages. */
+export interface GraphState {
+  nodes: Record<string, GraphNode>;
+  edges: Record<string, StreetEdge>;
+  nextNodeNum: number;
+  nextEdgeNum: number;
+}
+
+// Node classification is DERIVED from degree, never stored (Plan v2 §1.3).
+export type NodeClass = 'terminus' | 'bend' | 'junction' | 'crossroads';
+
+export function nodeClassOf(degree: number): NodeClass {
+  if (degree <= 1) return 'terminus';
+  if (degree === 2) return 'bend';
+  if (degree === 3) return 'junction';
+  return 'crossroads';
+}
+
+export interface Snap {
+  type: 'node' | 'edge';
+  id: string;
+  x: number;
+  y: number;
+}
+
+export interface DraftVert {
+  x: number;
+  y: number;
+  snap: Snap | null;
+}
+
+export interface DcCandidate {
+  e1: string;
+  e2: string;
+  meanSepM: number;
+  name?: string;
 }

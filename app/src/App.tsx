@@ -10,18 +10,24 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const s = useCst.getState();
-      if (e.key === 'Escape') {
+      const t = useCst.temporal.getState();
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) t.redo();
+        else t.undo();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        t.redo();
+      } else if (e.key === 'Escape') {
         if (s.draft.length > 0) s.cancelDraft();
-        else if (s.tool === 'draw') s.setTool('select');
+        else if (s.tool !== 'select') s.setTool('select');
         else s.selectEdge(null);
-      } else if (e.key === 'Enter' && s.draft.length >= 4) {
-        s.finishDraft();
-      } else if (
-        (e.key === 'Delete' || e.key === 'Backspace') &&
-        s.selectedEdgeId
-      ) {
-        s.deleteEdge(s.selectedEdgeId);
+      } else if (e.key === 'Enter' && s.draft.length >= 2) {
+        s.finishDraft(0.5);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && s.selectedEdgeId) {
+        s.removeEdge(s.selectedEdgeId);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -35,6 +41,14 @@ export default function App() {
           CST <span className="muted">· IRC Street Designer</span>
         </span>
         <StageTabs />
+        <div className="header-actions">
+          <button onClick={() => useCst.temporal.getState().undo()} title="Undo (Ctrl+Z)">
+            ↩
+          </button>
+          <button onClick={() => useCst.temporal.getState().redo()} title="Redo (Ctrl+Shift+Z)">
+            ↪
+          </button>
+        </div>
       </header>
       <main>
         <aside>{stage === 'sections' ? <SectionsPanel /> : <NetworkPanel />}</aside>

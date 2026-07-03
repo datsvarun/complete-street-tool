@@ -63,6 +63,26 @@ header {
   cursor: not-allowed;
 }
 
+.header-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.header-actions button {
+  background: #242c36;
+  border: 1px solid #333d49;
+  border-radius: 4px;
+  color: #dfe6ee;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.header-actions button:hover {
+  background: #2b3542;
+}
+
 main {
   flex: 1;
   display: flex;
@@ -148,10 +168,72 @@ aside {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .edge-list button {
   width: 100%;
+}
+
+.small {
+  font-size: 12px;
+}
+
+.ok {
+  color: #7fc98b;
+}
+
+.status {
+  color: #b9c3ce;
+  border-top: 1px solid #2b333d;
+  padding-top: 8px;
+}
+
+.issues {
+  margin: 0;
+  padding-left: 18px;
+  color: #e0a19f;
+}
+
+.field-row {
+  display: flex;
+  gap: 6px;
+}
+
+.field-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: #8b97a5;
+  flex: 1;
+  min-width: 0;
+}
+
+.field-row input {
+  width: 100%;
+  background: #242c36;
+  border: 1px solid #333d49;
+  border-radius: 4px;
+  color: #dfe6ee;
+  padding: 5px 6px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.dc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 6px;
+  border: 1px solid #333d49;
+  border-radius: 4px;
+}
+
+.dc-row:hover {
+  background: #2b3542;
 }
 
 .catalog {

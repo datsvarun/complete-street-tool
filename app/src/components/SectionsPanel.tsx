@@ -4,13 +4,14 @@ import { polylineLength } from '../geometry/polyline';
 import type { ComponentKind } from '../types';
 
 export function SectionsPanel() {
-  const { edges, selectedEdgeId } = useCst();
+  const edges = useCst((s) => s.edges);
+  const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const assignSection = useCst((s) => s.assignSection);
-  const selected = edges.find((e) => e.id === selectedEdgeId) ?? null;
+  const selected = selectedEdgeId ? (edges[selectedEdgeId] ?? null) : null;
   const currentSection = getSection(selected?.sectionId ?? null);
 
   const usedKinds = new Set<ComponentKind>();
-  for (const e of edges) {
+  for (const e of Object.values(edges)) {
     const s = getSection(e.sectionId);
     s?.components.forEach((c) => usedKinds.add(c.kind));
   }
@@ -21,9 +22,8 @@ export function SectionsPanel() {
       {selected ? (
         <p>
           <strong>{selected.id}</strong> · {polylineLength(selected.points).toFixed(0)} m
-          {currentSection && (
-            <span className="muted"> · {currentSection.name}</span>
-          )}
+          {selected.name && <span className="muted"> · {selected.name}</span>}
+          {currentSection && <span className="muted"> · {currentSection.name}</span>}
         </p>
       ) : (
         <p className="muted">Click a street on the canvas to assign a section.</p>
