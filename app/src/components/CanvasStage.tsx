@@ -3,7 +3,7 @@ import { Stage, Layer, Line, Circle, Ring } from 'react-konva';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
-import { getSection, KIND_COLORS } from '../catalog';
+import { KIND_COLORS } from '../catalog';
 import { buildRibbon } from '../geometry/ribbon';
 import { projectOnPolyline, dist } from '../geometry/polyline';
 import { nodeClassOf } from '../types';
@@ -91,9 +91,12 @@ function EdgeShape({
 }) {
   const selectEdge = useCst((s) => s.selectEdge);
   const splitEdgeAt = useCst((s) => s.splitEdgeAt);
-  const section = getSection(edge.sectionId);
-  const bands = useMemo(
-    () => (section ? buildRibbon(edge.points, section) : []),
+  const section = edge.section;
+  const { bands, markings } = useMemo(
+    () =>
+      section
+        ? buildRibbon(edge.points, section.components)
+        : { bands: [], markings: [] },
     [edge.points, section],
   );
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
@@ -123,6 +126,17 @@ function EdgeShape({
           strokeWidth={0.6}
           strokeScaleEnabled={false}
           onClick={onClick}
+        />
+      ))}
+      {markings.map((m) => (
+        <Line
+          key={`${edge.id}-${m.key}`}
+          points={m.line}
+          stroke="#f2f0e9"
+          strokeWidth={1}
+          dash={m.dashed ? [4, 4] : undefined}
+          strokeScaleEnabled={false}
+          listening={false}
         />
       ))}
       <Line

@@ -110,7 +110,7 @@ export function mergeDualCarriageway(g0: GraphState, c: DcCandidate): GraphState
         a: aKeep,
         b: bKeep,
         points: toFlat(mid),
-        sectionId: e1.sectionId ?? e2.sectionId,
+        section: e1.section ?? e2.section,
         highway: e1.highway,
         name: e1.name ?? e2.name,
         oneway: false,

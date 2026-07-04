@@ -79,7 +79,7 @@ export function splitEdge(
   const i = proj.segIdx * 2;
   const ptsA = [...e.points.slice(0, i + 2), proj.x, proj.y];
   const ptsB = [proj.x, proj.y, ...e.points.slice(i + 2)];
-  const base = { sectionId: e.sectionId, highway: e.highway, name: e.name, oneway: e.oneway,
+  const base = { section: e.section, highway: e.highway, name: e.name, oneway: e.oneway,
     carriagewayType: e.carriagewayType, medianWidth: e.medianWidth };
   delete g.edges[edgeId];
   addEdge(g, { ...base, a: e.a, b: nodeId, points: ptsA });
@@ -242,7 +242,7 @@ export function commitDraft(
         a: span[0].nodeId!,
         b: chain[i].nodeId!,
         points: toFlat(pts),
-        sectionId: null,
+        section: null,
       });
       g = res.g;
       created += 1;

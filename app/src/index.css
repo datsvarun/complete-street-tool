@@ -276,12 +276,155 @@ aside {
   border: 1px solid rgba(0, 0, 0, 0.3);
 }
 
+.canvas-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .canvas-host {
   flex: 1;
   position: relative;
   min-width: 0;
   background: #f4f2ec;
   overflow: hidden;
+}
+
+.strip-editor {
+  flex: none;
+  height: 132px;
+  background: #1b2129;
+  border-top: 1px solid #2b333d;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  gap: 8px;
+}
+
+.strip-editor.empty {
+  align-items: center;
+  justify-content: center;
+}
+
+.strip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.strip-actions {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.strip-actions button,
+.strip-actions select {
+  background: #242c36;
+  border: 1px solid #333d49;
+  border-radius: 4px;
+  color: #dfe6ee;
+  padding: 4px 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.strip-actions button.danger {
+  border-color: #7d3b39;
+  color: #e0a19f;
+}
+
+.strip-actions .w-input {
+  width: 56px;
+  background: #242c36;
+  border: 1px solid #333d49;
+  border-radius: 4px;
+  color: #dfe6ee;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+
+.strip-row {
+  flex: 1;
+  display: flex;
+  gap: 2px;
+  min-height: 0;
+}
+
+.strip-block {
+  border: 2px solid rgba(0, 0, 0, 0.35);
+  border-radius: 3px;
+  min-width: 34px;
+  flex-basis: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  font: inherit;
+  padding: 2px;
+  overflow: hidden;
+}
+
+.strip-block.selected {
+  border-color: #e08e45;
+}
+
+.strip-block.warn {
+  border-color: #d84a45;
+  border-style: dashed;
+}
+
+.strip-label {
+  font-size: 11px;
+  line-height: 1.15;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 2.4em;
+}
+
+.strip-width {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 170px;
+  overflow-y: auto;
+}
+
+.review-list li {
+  display: flex;
+  gap: 4px;
+}
+
+.review-list li > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.review-list li.active > button:first-child {
+  border-color: #e08e45;
+}
+
+.review-list .dismiss {
+  flex: none;
+  padding: 4px 8px;
 }
 
 .status-bar {

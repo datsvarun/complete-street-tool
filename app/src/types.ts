@@ -44,12 +44,22 @@ export interface GraphNode {
   y: number;
 }
 
+/**
+ * A section applied to an edge is a materialized COPY of a catalog section
+ * (copy-on-write): the strip editor edits it freely without touching the
+ * catalog. catalogId keeps provenance for labels/citations.
+ */
+export interface EdgeSection {
+  catalogId: string | null; // null once customized beyond recognition (or hand-built)
+  components: SectionComponent[];
+}
+
 export interface StreetEdge {
   id: string;
   a: string;                 // node id at points[0]
   b: string;                 // node id at points[last]
   points: number[];          // flat [x0, y0, ...] centerline, metres; endpoints mirror node coords
-  sectionId: string | null;
+  section: EdgeSection | null;
   highway?: string;          // OSM highway class
   name?: string;
   oneway?: boolean;
@@ -93,4 +103,9 @@ export interface DcCandidate {
   e2: string;
   meanSepM: number;
   name?: string;
+}
+
+export interface ReviewItem {
+  edgeId: string;
+  reason: string;
 }

@@ -4,6 +4,7 @@ import { StageTabs } from './components/StageTabs';
 import { NetworkPanel } from './components/NetworkPanel';
 import { SectionsPanel } from './components/SectionsPanel';
 import { CanvasStage } from './components/CanvasStage';
+import { StripEditor } from './components/StripEditor';
 
 export default function App() {
   const stage = useCst((s) => s.stage);
@@ -52,7 +53,10 @@ export default function App() {
       </header>
       <main>
         <aside>{stage === 'sections' ? <SectionsPanel /> : <NetworkPanel />}</aside>
-        <CanvasStage />
+        <div className="canvas-col">
+          <CanvasStage />
+          {stage === 'sections' && <StripEditor />}
+        </div>
       </main>
     </div>
   );

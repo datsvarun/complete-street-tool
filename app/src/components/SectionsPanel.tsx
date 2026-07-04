@@ -6,14 +6,18 @@ import type { ComponentKind } from '../types';
 export function SectionsPanel() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
+  const reviewList = useCst((s) => s.reviewList);
+  const statusMsg = useCst((s) => s.statusMsg);
   const assignSection = useCst((s) => s.assignSection);
+  const selectEdge = useCst((s) => s.selectEdge);
+  const dismissReview = useCst((s) => s.dismissReview);
+  const autoAssign = useCst((s) => s.autoAssign);
   const selected = selectedEdgeId ? (edges[selectedEdgeId] ?? null) : null;
-  const currentSection = getSection(selected?.sectionId ?? null);
+  const currentCatalog = getSection(selected?.section?.catalogId ?? null);
 
   const usedKinds = new Set<ComponentKind>();
   for (const e of Object.values(edges)) {
-    const s = getSection(e.sectionId);
-    s?.components.forEach((c) => usedKinds.add(c.kind));
+    e.section?.components.forEach((c) => usedKinds.add(c.kind));
   }
 
   return (
@@ -23,26 +27,52 @@ export function SectionsPanel() {
         <p>
           <strong>{selected.id}</strong> · {polylineLength(selected.points).toFixed(0)} m
           {selected.name && <span className="muted"> · {selected.name}</span>}
-          {currentSection && <span className="muted"> · {currentSection.name}</span>}
+          {selected.section && (
+            <span className="muted">
+              {' '}
+              · {currentCatalog ? currentCatalog.name : 'custom section'}
+            </span>
+          )}
         </p>
       ) : (
-        <p className="muted">Click a street on the canvas to assign a section.</p>
+        <p className="muted">Click a street on the canvas, or an item in the review list.</p>
       )}
-      {selected && currentSection && (
+      {selected?.section && (
         <button className="danger" onClick={() => assignSection(selected.id, null)}>
           Remove section
         </button>
       )}
 
+      <h3>Auto-assignment</h3>
+      <button onClick={() => autoAssign()}>Assign from highway class</button>
+      {reviewList.length > 0 && (
+        <>
+          <p className="muted small">Review ({reviewList.length}):</p>
+          <ul className="review-list">
+            {reviewList.map((r) => (
+              <li key={r.edgeId} className={r.edgeId === selectedEdgeId ? 'active' : ''}>
+                <button onClick={() => selectEdge(r.edgeId)}>
+                  <strong>{r.edgeId}</strong>
+                  <span className="muted small"> {r.reason}</span>
+                </button>
+                <button className="dismiss" title="Dismiss" onClick={() => dismissReview(r.edgeId)}>
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
       <h3>IRC SP:118-2018 catalog</h3>
       <div className="catalog">
         {CATALOG_BY_ROW.map((group) => (
-          <details key={group.rowWidthM} open={group.rowWidthM === 12}>
+          <details key={group.rowWidthM} open={group.rowWidthM === 24}>
             <summary>{group.rowWidthM} m ROW</summary>
             {group.sections.map((s) => (
               <button
                 key={s.id}
-                className={currentSection?.id === s.id ? 'catalog-item active' : 'catalog-item'}
+                className={currentCatalog?.id === s.id ? 'catalog-item active' : 'catalog-item'}
                 disabled={!selected}
                 title={selected ? undefined : 'Select a street first'}
                 onClick={() => selected && assignSection(selected.id, s.id)}
@@ -68,6 +98,7 @@ export function SectionsPanel() {
           </ul>
         </>
       )}
+      {statusMsg && <p className="status small">{statusMsg}</p>}
     </div>
   );
 }

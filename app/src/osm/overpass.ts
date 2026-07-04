@@ -110,7 +110,7 @@ export function parseOsm(data: OsmJson): GraphState {
           g.nextEdgeNum += 1;
           g.edges[id] = {
             id, a: aId, b: bId, points,
-            sectionId: null,
+            section: null,
             highway: tags.highway,
             name: tags.name,
             oneway,

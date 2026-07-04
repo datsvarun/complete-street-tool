@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
-import type { DcCandidate, DraftVert, GraphState, Stage, Tool } from './types';
+import type { DcCandidate, DraftVert, GraphState, ReviewItem, SectionComponent, Stage, Tool } from './types';
 import {
   commitDraft,
   deleteEdge,
@@ -14,6 +14,8 @@ import {
 import { runStandardPipeline } from './graph/transforms';
 import { detectDualCarriageways, mergeDualCarriageway } from './graph/dualCarriageway';
 import { fetchOverpass, parseOsm, DEFAULT_IMPORT } from './osm/overpass';
+import { getSection } from './catalog';
+import { autoAssignSections, materialize } from './sections/rules';
 
 // One shared store across all stages; stage is a UI mode, not a data boundary
 // (Plan v2 §1.1). The graph core (nodes/edges) is the undoable slice.
@@ -30,6 +32,7 @@ interface CstState extends GraphState {
   pendingFit: Bounds | null;
   statusMsg: string;
   importBusy: boolean;
+  reviewList: ReviewItem[];
 
   setStage: (stage: Stage) => void;
   setTool: (tool: Tool) => void;
@@ -39,7 +42,10 @@ interface CstState extends GraphState {
   selectEdge: (id: string | null) => void;
   removeEdge: (id: string) => void;
   removeNode: (id: string) => void;
-  assignSection: (edgeId: string, sectionId: string | null) => void;
+  assignSection: (edgeId: string, catalogId: string | null) => void;
+  updateSectionComponents: (edgeId: string, components: SectionComponent[]) => void;
+  autoAssign: () => void;
+  dismissReview: (edgeId: string) => void;
   moveNodeTo: (id: string, x: number, y: number) => void;
   mergeNodePair: (keep: string, drop: string) => void;
   splitEdgeAt: (edgeId: string, x: number, y: number) => void;
@@ -78,8 +84,18 @@ export const useCst = create<CstState>()(
       pendingFit: null,
       statusMsg: '',
       importBusy: false,
+      reviewList: [],
 
-      setStage: (stage) => set({ stage, tool: 'select', draft: [], highlightEdges: [] }),
+      setStage: (stage) => {
+        set({ stage, tool: 'select', draft: [], highlightEdges: [] });
+        // First entry into Sections with unassigned tagged edges → auto-assign
+        // + review list (Plan v2 §3.3), never overwriting existing work.
+        if (stage === 'sections') {
+          const s = get();
+          const hasUnassigned = Object.values(s.edges).some((e) => !e.section && e.highway);
+          if (hasUnassigned) get().autoAssign();
+        }
+      },
       setTool: (tool) => set((s) => ({ tool, draft: tool === 'draw' ? s.draft : [] })),
 
       addDraftVert: (v) => set((s) => ({ draft: [...s.draft, v] })),
@@ -108,10 +124,46 @@ export const useCst = create<CstState>()(
 
       removeNode: (id) => set((s) => ({ ...deleteNode(pickGraph(s), id), dcCandidates: null })),
 
-      assignSection: (edgeId, sectionId) =>
-        set((s) => ({
-          edges: { ...s.edges, [edgeId]: { ...s.edges[edgeId], sectionId } },
-        })),
+      assignSection: (edgeId, catalogId) =>
+        set((s) => {
+          const cat = getSection(catalogId);
+          const section = cat ? materialize(cat) : null;
+          return {
+            edges: { ...s.edges, [edgeId]: { ...s.edges[edgeId], section } },
+            reviewList: s.reviewList.filter((r) => r.edgeId !== edgeId),
+          };
+        }),
+
+      updateSectionComponents: (edgeId, components) =>
+        set((s) => {
+          const e = s.edges[edgeId];
+          if (!e?.section) return {};
+          return {
+            edges: {
+              ...s.edges,
+              [edgeId]: { ...e, section: { ...e.section, components } },
+            },
+          };
+        }),
+
+      autoAssign: () =>
+        set((s) => {
+          const { assigned, review } = autoAssignSections(pickGraph(s));
+          const n = Object.keys(assigned).length;
+          if (n === 0 && review.length === 0) return {};
+          const edges = { ...s.edges };
+          for (const [id, section] of Object.entries(assigned)) {
+            edges[id] = { ...edges[id], section };
+          }
+          return {
+            edges,
+            reviewList: review,
+            statusMsg: `${n} section(s) auto-assigned from highway class · ${review.length} to review`,
+          };
+        }),
+
+      dismissReview: (edgeId) =>
+        set((s) => ({ reviewList: s.reviewList.filter((r) => r.edgeId !== edgeId) })),
 
       moveNodeTo: (id, x, y) => set((s) => ({ ...moveNode(pickGraph(s), id, x, y) })),
 

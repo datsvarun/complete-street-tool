@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { useCst, DEFAULT_IMPORT } from '../store';
-import { getSection } from '../catalog';
 import { polylineLength } from '../geometry/polyline';
 import { validateGraph } from '../graph/validate';
 
@@ -126,7 +125,7 @@ export function NetworkPanel() {
                 {' '}
                 {e.name ?? e.highway ?? ''}
                 {e.carriagewayType === 'divided' ? ' · divided' : e.oneway ? ' · oneway' : ''}
-                {getSection(e.sectionId) ? ` · ${getSection(e.sectionId)!.rowWidthM}m ROW` : ''}
+                {e.section ? ' · sectioned' : ''}
               </span>
             </button>
           </li>
