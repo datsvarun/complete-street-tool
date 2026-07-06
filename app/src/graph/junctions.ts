@@ -1,14 +1,17 @@
-// Derived node artifacts, recomputed from the graph on every change (§1.2):
-// - junction polygons — osm2streets corner method (Case_Study §1.2) generalized
-//   to CLUSTERS: junctions whose polygons would collide on a shared edge merge
-//   into one complex junction; the shared edges become junction surface
-// - corner fillets: curb-side corners rounded with a class-independent radius,
-//   and corner distance clamped so shallow-angle approaches can't spike
-// - section transitions at degree-2 nodes whose two edges carry different
-//   sections — the node itself is the transition point (Sections workflow)
-// - per-end edge trims so ribbons stop where these artifacts take over
+// Derived node artifacts, recomputed from the graph on every change (§1.2).
+// Junction geometry per Junction_Tool_Design.md slices J1+J2:
+// - curb-line corner solver: tangent arcs of a real turning radius R between
+//   the curb lines of adjacent approaches; R from a citable class table,
+//   shrunk to fit short frontages; tangent stations become the ribbon trims
+// - corner wedges: the raised stacks (footpath/cycle/buffer…) of adjacent
+//   approaches bridge seamlessly around the arc — the transition engine's
+//   matcher/sampler running on the corner path instead of a centerline
+// - median noses: divided approaches end in a rounded cap at the mouth
+// - clusters: colliding junctions merge (union-find) into one complex junction
+// - degree-2 section transitions: the node is the transition point
 import type { GraphState, SectionComponent, StreetEdge } from '../types';
 import {
+  dedupe as dedupePts,
   dist,
   offsetPolyline,
   pointAtStation,
@@ -30,14 +33,45 @@ import {
 
 const FALLBACK_WIDTH_M = 7; // approaches without a section still shape the junction
 const MIN_TRIM_M = 1;
-const FILLET_R_M = 6;       // curb corner radius (parametric per-junction later)
 const MERGE_FRACTION = 0.75; // trims consuming this much of an edge merge its junctions
+const MIN_RADIUS_M = 1.2;
+const MAX_TANGENT_FRACTION = 0.45; // of the approach length
+
+/** Kerb radius defaults by the street classes meeting at the corner,
+ *  metres — IRC:103-2012 kerb radii (verify against the document). */
+const RADIUS_TABLE: Array<{ ranks: [string, string]; r: number }> = [
+  { ranks: ['service', 'service'], r: 3 },
+  { ranks: ['service', 'local'], r: 3.5 },
+  { ranks: ['service', 'arterial'], r: 4.5 },
+  { ranks: ['local', 'local'], r: 4.5 },
+  { ranks: ['local', 'arterial'], r: 6 },
+  { ranks: ['arterial', 'arterial'], r: 9 },
+];
+
+function classRank(highway?: string): 'service' | 'local' | 'arterial' {
+  if (!highway) return 'local';
+  if (['motorway', 'trunk', 'primary', 'secondary'].some((h) => highway.startsWith(h))) return 'arterial';
+  if (['service', 'pedestrian', 'living_street'].includes(highway)) return 'service';
+  return 'local';
+}
+
+function defaultRadius(a?: string, b?: string): number {
+  const pair = [classRank(a), classRank(b)].sort() as [string, string];
+  const hit = RADIUS_TABLE.find((t) => t.ranks[0] === pair[0] && t.ranks[1] === pair[1]);
+  return hit?.r ?? 6;
+}
+
+// Components flush with the carriageway (parking is at-grade in Indian practice);
+// everything else is a raised component that wraps corners as a wedge.
+const DRIVABLE = new Set(['carriageway', 'mixed', 'service', 'brt', 'parking']);
 
 export interface JunctionPoly {
   nodeIds: string[];
   degree: number;      // number of approaches
-  polygon: number[];
+  polygon: number[];   // carriageway surface (curb ring with fillet arcs)
   coverBands: number[][]; // internal consumed edges, filled as junction surface
+  wedges: RibbonBand[];   // corner wedges bridging raised stacks
+  noses: RibbonBand[];    // median nose caps
   names: string[];
 }
 
@@ -47,19 +81,14 @@ export interface NodeTransition {
 }
 
 export interface EdgeTrim {
-  start: number; // metres cut from the a-end
-  end: number;   // metres cut from the b-end
+  start: number;
+  end: number;
 }
 
 export interface NodeArtifacts {
   junctions: JunctionPoly[];
   transitions: NodeTransition[];
   trims: Record<string, EdgeTrim>;
-}
-
-function edgeWidth(e: StreetEdge): number {
-  const total = e.section?.components.reduce((s, c) => s + c.widthM, 0);
-  return total && total > 0.5 ? total : FALLBACK_WIDTH_M;
 }
 
 /** Edge points oriented to START at the given node. */
@@ -93,7 +122,6 @@ function firstHit(a: number[], b: number[]): { x: number; y: number } | null {
   return null;
 }
 
-/** Intersection of the infinite lines through the first segments of a and b. */
 function firstSegLineHit(a: number[], b: number[]): { x: number; y: number } | null {
   const d1x = a[2] - a[0], d1y = a[3] - a[1];
   const d2x = b[2] - b[0], d2y = b[3] - b[1];
@@ -105,13 +133,211 @@ function firstSegLineHit(a: number[], b: number[]): { x: number; y: number } | n
 
 interface Approach {
   edge: StreetEdge;
-  node: string;      // the cluster node this approach leaves from
+  node: string;
   away: number[];
   len: number;
-  hw: number;
-  left: number[];
-  right: number[];
+  rowHalfL: number;   // signed offset of the section's outer LEFT boundary
+  rowHalfR: number;   // signed offset of the outer RIGHT boundary
+  curbL: number;      // signed offset of the left curb (drivable boundary)
+  curbR: number;
+  stackL: SectionComponent[]; // raised stack outside-in on the left
+  stackR: SectionComponent[]; // raised stack outside-in on the right
+  leftCurbPts: number[];
+  rightCurbPts: number[];
   angle: number;
+}
+
+function buildApproach(e: StreetEdge, nodeId: string, cx: number, cy: number): Approach {
+  const away = pointsAwayFrom(e, nodeId);
+  const len = polylineLength(away);
+  const reversed = e.a !== nodeId;
+  const comps = orientedComponents(e, reversed);
+  const total = comps.reduce((s, c) => s + c.widthM, 0);
+
+  let base: number, curbL: number, curbR: number;
+  let stackL: SectionComponent[] = [];
+  let stackR: SectionComponent[] = [];
+  if (e.section && total > 0.5) {
+    const f = reversed ? 1 - refFraction(e.section) : refFraction(e.section);
+    base = total * f;
+    let iL = 0;
+    while (iL < comps.length && !DRIVABLE.has(comps[iL].kind)) iL++;
+    let iR = comps.length - 1;
+    while (iR >= 0 && !DRIVABLE.has(comps[iR].kind)) iR--;
+    if (iL > iR) {
+      // no drivable component (pure pedestrian street): treat as flush
+      curbL = base;
+      curbR = base - total;
+    } else {
+      stackL = comps.slice(0, iL); // already outside-in
+      stackR = comps.slice(iR + 1).reverse(); // outside-in
+      curbL = base - stackL.reduce((s, c) => s + c.widthM, 0);
+      curbR = base - total + stackR.reduce((s, c) => s + c.widthM, 0);
+    }
+  } else {
+    base = FALLBACK_WIDTH_M / 2;
+    curbL = FALLBACK_WIDTH_M / 2;
+    curbR = -FALLBACK_WIDTH_M / 2;
+  }
+
+  const probe = pointAtStation(away, Math.min(6, len * 0.5));
+  return {
+    edge: e,
+    node: nodeId,
+    away,
+    len,
+    rowHalfL: base,
+    rowHalfR: e.section && total > 0.5 ? base - total : -FALLBACK_WIDTH_M / 2,
+    curbL,
+    curbR,
+    stackL,
+    stackR,
+    leftCurbPts: offsetSide(away, curbL),
+    rightCurbPts: offsetSide(away, curbR),
+    angle: Math.atan2(probe.y - cy, probe.x - cx),
+  };
+}
+
+/** Chaikin corner-cutting (endpoints kept): rounds the kinks of a chamfer
+ *  fallback corner path so band normals rotate gradually instead of jumping. */
+function chaikinSmooth(flat: number[], iterations = 2): number[] {
+  let pts = toPts(flat);
+  for (let it = 0; it < iterations; it++) {
+    if (pts.length < 3) break;
+    const out = [pts[0]];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      out.push({ x: 0.75 * a.x + 0.25 * b.x, y: 0.75 * a.y + 0.25 * b.y });
+      out.push({ x: 0.25 * a.x + 0.75 * b.x, y: 0.25 * a.y + 0.75 * b.y });
+    }
+    out.push(pts[pts.length - 1]);
+    pts = out;
+  }
+  return toFlat(pts);
+}
+
+/** Drop points that double back against the row's direction of travel.
+ *  Offsetting a kinked corner path (chamfer fallback) by a wide raised stack
+ *  folds the offset row over itself — the band renders as a bow-tie spike.
+ *  Clamping to monotone progress pinches the band instead. */
+function unfoldRow(row: number[]): number[] {
+  if (row.length < 6) return row;
+  const out = [row[0], row[1]];
+  let dx = 0, dy = 0;
+  for (let i = 2; i + 1 < row.length; i += 2) {
+    const sx = row[i] - out[out.length - 2];
+    const sy = row[i + 1] - out[out.length - 1];
+    const len = Math.hypot(sx, sy);
+    if (len < 0.02) continue;
+    if (dx * sx + dy * sy < 0) continue; // fold
+    out.push(row[i], row[i + 1]);
+    dx = sx / len;
+    dy = sy / len;
+  }
+  return out;
+}
+
+/** Wedge band polygons are two offset rows (upper + reversed lower); unfold each. */
+function unfoldBand(polygon: number[]): number[] {
+  const half = polygon.length / 2;
+  const evenHalf = half - (half % 2);
+  return [...unfoldRow(polygon.slice(0, evenHalf)), ...unfoldRow(polygon.slice(evenHalf))];
+}
+
+interface Corner {
+  arc: number[];        // fillet polyline from A-side tangent to B-side tangent
+  sTAcurb: number;      // tangent station on A's right curb
+  sTBcurb: number;      // tangent station on B's left curb
+  clA: number;          // centerline trim demanded on A
+  clB: number;          // centerline trim demanded on B
+}
+
+/** Tangent arc of radius R between a's right curb and b's left curb; shrinks R to fit. */
+function solveCorner(a: Approach, b: Approach): Corner {
+  const capA = a.len * MAX_TANGENT_FRACTION;
+  const capB = b.len * MAX_TANGENT_FRACTION;
+
+  // The mouth must clear at ROW level or the two ribbons (with their raised
+  // bands) invade each other's corner quadrant — the arc is curb geometry,
+  // the trim is ROW geometry.
+  let rowA = MIN_TRIM_M;
+  let rowB = MIN_TRIM_M;
+  const outerA = offsetSide(a.away, a.rowHalfR);
+  const outerB = offsetSide(b.away, b.rowHalfL);
+  const rowHit = firstHit(outerA, outerB) ?? firstSegLineHit(outerA, outerB);
+  if (rowHit) {
+    rowA = Math.min(projectOnPolyline(a.away, rowHit.x, rowHit.y)?.station ?? MIN_TRIM_M, capA);
+    rowB = Math.min(projectOnPolyline(b.away, rowHit.x, rowHit.y)?.station ?? MIN_TRIM_M, capB);
+  }
+
+  let R = defaultRadius(a.edge.highway, b.edge.highway);
+
+  while (R >= MIN_RADIUS_M) {
+    // The fillet centre sits in the corner quadrant (inside the block corner),
+    // R beyond each curb on the NON-drivable side — offsetting toward the
+    // centreline instead puts tangents on the node side and the arc doubles back.
+    const cA = offsetSide(a.away, a.curbR - R);
+    const cB = offsetSide(b.away, b.curbL + R);
+    const center = firstHit(cA, cB) ?? firstSegLineHit(cA, cB);
+    if (center) {
+      const pA = projectOnPolyline(a.rightCurbPts, center.x, center.y);
+      const pB = projectOnPolyline(b.leftCurbPts, center.x, center.y);
+      if (pA && pB && Math.abs(pA.dist - R) < R * 0.35 && Math.abs(pB.dist - R) < R * 0.35) {
+        const clA = projectOnPolyline(a.away, pA.x, pA.y)?.station ?? pA.station;
+        const clB = projectOnPolyline(b.away, pB.x, pB.y)?.station ?? pB.station;
+        if (clA <= capA && clB <= capB) {
+          // Sample the arc from T_A to T_B. Start with the short sweep, but
+          // the fillet must CONTINUE the incoming curb direction at T_A —
+          // if the short sweep leaves T_A backwards, take the complement,
+          // or the whole corner path doubles back and its normals flip.
+          const a0 = Math.atan2(pA.y - center.y, pA.x - center.x);
+          const a1 = Math.atan2(pB.y - center.y, pB.x - center.x);
+          let sweep = a1 - a0;
+          while (sweep > Math.PI) sweep -= 2 * Math.PI;
+          while (sweep < -Math.PI) sweep += 2 * Math.PI;
+          const tangentAtTA = pointAtStation(a.rightCurbPts, pA.station);
+          // inbound direction (toward the node) = reversed curb tangent
+          const inX = tangentAtTA.ny;
+          const inY = -tangentAtTA.nx;
+          const arcInitX = -Math.sin(a0) * Math.sign(sweep);
+          const arcInitY = Math.cos(a0) * Math.sign(sweep);
+          if (inX * arcInitX + inY * arcInitY < 0) {
+            sweep = sweep - Math.sign(sweep) * 2 * Math.PI;
+          }
+          const arcLen = Math.abs(sweep) * R;
+          const N = Math.max(4, Math.ceil(arcLen / 1.2));
+          const arc: number[] = [];
+          for (let k = 0; k <= N; k++) {
+            const t = a0 + (sweep * k) / N;
+            arc.push(center.x + R * Math.cos(t), center.y + R * Math.sin(t));
+          }
+          return { arc, sTAcurb: pA.station, sTBcurb: pB.station, clA: Math.max(clA, rowA), clB: Math.max(clB, rowB) };
+        }
+      }
+    }
+    R *= 0.75;
+  }
+
+  // Fallback: chamfer at the curb-line collision (near-parallel / degenerate pairs)
+  const hit =
+    firstHit(a.rightCurbPts, b.leftCurbPts) ??
+    firstSegLineHit(a.rightCurbPts, b.leftCurbPts) ?? {
+      x: (a.rightCurbPts[0] + b.leftCurbPts[0]) / 2,
+      y: (a.rightCurbPts[1] + b.leftCurbPts[1]) / 2,
+    };
+  const pA = projectOnPolyline(a.rightCurbPts, hit.x, hit.y);
+  const pB = projectOnPolyline(b.leftCurbPts, hit.x, hit.y);
+  const sA = Math.min(pA?.station ?? MIN_TRIM_M, capA);
+  const sB = Math.min(pB?.station ?? MIN_TRIM_M, capB);
+  const qA = pointAtStation(a.rightCurbPts, sA);
+  const qB = pointAtStation(b.leftCurbPts, sB);
+  return {
+    arc: [qA.x, qA.y, qB.x, qB.y],
+    sTAcurb: sA,
+    sTBcurb: sB,
+    clA: Math.max(Math.min(projectOnPolyline(a.away, qA.x, qA.y)?.station ?? sA, capA), rowA),
+    clB: Math.max(Math.min(projectOnPolyline(b.away, qB.x, qB.y)?.station ?? sB, capB), rowB),
+  };
 }
 
 interface ClusterResult {
@@ -119,33 +345,6 @@ interface ClusterResult {
   trims: Array<{ edgeId: string; end: 'start' | 'end'; trim: number }>;
 }
 
-/** Rounded corner: replace C between prev→C→next with a sampled quadratic arc. */
-function filletCorner(prev: { x: number; y: number }, C: { x: number; y: number }, next: { x: number; y: number }): number[] {
-  const dPrev = dist(C.x, C.y, prev.x, prev.y);
-  const dNext = dist(C.x, C.y, next.x, next.y);
-  const r = Math.min(FILLET_R_M, dPrev * 0.6, dNext * 0.6);
-  if (r < 0.4) return [C.x, C.y];
-  const p1 = { x: C.x + ((prev.x - C.x) / dPrev) * r, y: C.y + ((prev.y - C.y) / dPrev) * r };
-  const p2 = { x: C.x + ((next.x - C.x) / dNext) * r, y: C.y + ((next.y - C.y) / dNext) * r };
-  const out: number[] = [];
-  const N = 6;
-  for (let k = 0; k <= N; k++) {
-    const t = k / N;
-    const a = 1 - t;
-    out.push(
-      a * a * p1.x + 2 * a * t * C.x + t * t * p2.x,
-      a * a * p1.y + 2 * a * t * C.y + t * t * p2.y,
-    );
-  }
-  return out;
-}
-
-/**
- * Junction polygon for a cluster of one or more nodes: approaches sorted
- * clockwise, right-side × left-side collisions per adjacent pair, corners
- * projected perpendicularly onto centerlines for square trims, corner
- * distance clamped (no shallow-angle spikes), curb corners filleted.
- */
 function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]): ClusterResult | null {
   const inCluster = new Set(nodeIds);
   const approachesRaw: Array<{ edge: StreetEdge; node: string }> = [];
@@ -161,72 +360,118 @@ function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]):
 
   const cx = nodeIds.reduce((s, id) => s + g.nodes[id].x, 0) / nodeIds.length;
   const cy = nodeIds.reduce((s, id) => s + g.nodes[id].y, 0) / nodeIds.length;
-  const clusterR = Math.max(...nodeIds.map((id) => dist(g.nodes[id].x, g.nodes[id].y, cx, cy)), 0);
 
-  const approaches: Approach[] = approachesRaw.map(({ edge, node }) => {
-    const away = pointsAwayFrom(edge, node);
-    const hw = Math.max(edgeWidth(edge) / 2, 1);
-    const len = polylineLength(away);
-    const probe = pointAtStation(away, Math.min(6, len * 0.5));
-    return {
-      edge, node, away, len, hw,
-      left: offsetSide(away, hw),
-      right: offsetSide(away, -hw),
-      angle: Math.atan2(probe.y - cy, probe.x - cx),
-    };
-  });
-  approaches.sort((p, q) => p.angle - q.angle); // ascending atan2 = clockwise, y-down
-
-  const maxHw = Math.max(...approaches.map((a) => a.hw));
-  const cornerClamp = clusterR + maxHw * 3 + 4;
+  const approaches = approachesRaw
+    .map(({ edge, node }) => buildApproach(edge, node, cx, cy))
+    .sort((p, q) => p.angle - q.angle); // ascending atan2 = clockwise in y-down
 
   const k = approaches.length;
-  const corners: Array<{ x: number; y: number }> = [];
+  const corners: Corner[] = [];
   for (let i = 0; i < k; i++) {
-    const a = approaches[i];
-    const b = approaches[(i + 1) % k];
-    let hit =
-      firstHit(a.right, b.left) ??
-      firstSegLineHit(a.right, b.left) ?? {
-        x: (a.right[0] + b.left[0]) / 2,
-        y: (a.right[1] + b.left[1]) / 2,
-      };
-    // Clamp runaway corners from near-parallel side pairs (the "spike" case).
-    const d = dist(hit.x, hit.y, cx, cy);
-    if (d > cornerClamp) {
-      hit = { x: cx + ((hit.x - cx) / d) * cornerClamp, y: cy + ((hit.y - cy) / d) * cornerClamp };
-    }
-    corners.push(hit);
+    corners.push(solveCorner(approaches[i], approaches[(i + 1) % k]));
   }
 
+  // Ribbon trim per approach: the larger tangent demand of its two corners.
   const trims: number[] = approaches.map((a, i) => {
-    const cPrev = corners[(i - 1 + k) % k];
-    const cNext = corners[i];
-    let t = MIN_TRIM_M;
-    for (const c of [cPrev, cNext]) {
-      const proj = projectOnPolyline(a.away, c.x, c.y);
-      if (proj) t = Math.max(t, proj.station);
-    }
-    return Math.min(t, a.len * 0.45);
+    const demandL = corners[(i - 1 + k) % k].clB; // corner on my left curb
+    const demandR = corners[i].clA;               // corner on my right curb
+    return Math.min(Math.max(MIN_TRIM_M, demandL, demandR), a.len * MAX_TANGENT_FRACTION);
   });
 
-  // Ring with filleted curb corners: left cap, right cap, fillet(corner).
+  // Surface ring: mouth caps at curb offsets + curb segments + fillet arcs.
   const ring: number[] = [];
+  const wedges: RibbonBand[] = [];
   approaches.forEach((a, i) => {
-    const p = pointAtStation(a.away, trims[i]);
-    const pl = { x: p.x + p.nx * a.hw, y: p.y + p.ny * a.hw };
-    const pr = { x: p.x - p.nx * a.hw, y: p.y - p.ny * a.hw };
     const next = approaches[(i + 1) % k];
+    const corner = corners[i];
+    const p = pointAtStation(a.away, trims[i]);
+    const pl = { x: p.x + p.nx * a.curbL, y: p.y + p.ny * a.curbL };
+    const pr = { x: p.x + p.nx * a.curbR, y: p.y + p.ny * a.curbR };
     const pNext = pointAtStation(next.away, trims[(i + 1) % k]);
-    const plNext = { x: pNext.x + pNext.nx * next.hw, y: pNext.y + pNext.ny * next.hw };
+    const plNext = { x: pNext.x + pNext.nx * next.curbL, y: pNext.y + pNext.ny * next.curbL };
+
     ring.push(pl.x, pl.y, pr.x, pr.y);
-    ring.push(...filletCorner(pr, corners[i], plNext));
+
+    // walk my right curb from the mouth down to the tangent point…
+    const sPr = projectOnPolyline(a.rightCurbPts, pr.x, pr.y)?.station ?? trims[i];
+    const segA = sPr > corner.sTAcurb + 0.05 ? subPolyline(a.rightCurbPts, corner.sTAcurb, sPr) : null;
+    const segARev: number[] = [];
+    if (segA) for (let m = segA.length - 2; m >= 0; m -= 2) segARev.push(segA[m], segA[m + 1]);
+    // …around the fillet arc…
+    // …and up the neighbour's left curb to its mouth.
+    const sPlNext = projectOnPolyline(next.leftCurbPts, plNext.x, plNext.y)?.station ?? trims[(i + 1) % k];
+    const segB = sPlNext > corner.sTBcurb + 0.05 ? subPolyline(next.leftCurbPts, corner.sTBcurb, sPlNext) : null;
+
+    ring.push(...segARev, ...corner.arc, ...(segB ?? []));
+
+    // Corner wedge: raised stacks bridge outward along the same corner path.
+    const stackA = a.stackR;
+    const stackB = next.stackL;
+    if (stackA.length > 0 || stackB.length > 0) {
+      // dedupe joints: duplicated points make zero-length segments whose
+      // normals vanish and pinch the sampled bands into spikes
+      let path = chaikinSmooth(toFlat(dedupePts(toPts([...segARev, ...corner.arc, ...(segB ?? [])]), 0.08)));
+      const pathLen = polylineLength(path);
+      if (path.length >= 4 && pathLen > 0.3) {
+        // Bands offset to the LEFT of the path — that must be OUTWARD (away
+        // from the junction). Test at the midpoint and reverse if not.
+        const mid = pointAtStation(path, pathLen / 2);
+        const towardOut =
+          dist(mid.x + mid.nx, mid.y + mid.ny, cx, cy) > dist(mid.x, mid.y, cx, cy);
+        let matched = matchComponents(stackA, stackB);
+        if (!towardOut) {
+          const rev: number[] = [];
+          for (let m = path.length - 2; m >= 0; m -= 2) rev.push(path[m], path[m + 1]);
+          path = rev;
+          matched = matchComponents(stackB, stackA);
+        }
+        wedges.push(
+          ...sampleTransitionBands(path, matched, 0, pathLen, `w${i}`, 1, 1).map((b) => ({
+            ...b,
+            key: `j-${b.key}`,
+            polygon: unfoldBand(b.polygon),
+          })),
+        );
+      }
+    }
   });
 
-  // Internal edges become junction surface: full-width cover bands.
-  const coverBands = internal.map((e) =>
-    ribbonBand(toPts(e.points), edgeWidth(e) / 2, -edgeWidth(e) / 2),
-  );
+  // Median noses: a divided approach's median ends in a rounded cap at the mouth.
+  const noses: RibbonBand[] = [];
+  approaches.forEach((a, i) => {
+    const comps = orientedComponents(a.edge, a.edge.a !== a.node);
+    if (!a.edge.section) return;
+    const total = comps.reduce((s, c) => s + c.widthM, 0);
+    const f = a.edge.a !== a.node ? 1 - refFraction(a.edge.section) : refFraction(a.edge.section);
+    let off = total * f;
+    comps.forEach((c, ci) => {
+      const isInnerMedian = c.kind === 'median' && ci > 0 && ci < comps.length - 1;
+      if (isInnerMedian && c.widthM > 0.3) {
+        // Rounded nose: a circle cap centred on the median end at the mouth
+        // (visually a semicircular nose at plan scale — the ribbon covers the
+        // half that overlaps the median band).
+        const mid = off - c.widthM / 2;
+        const r = c.widthM / 2;
+        const p = pointAtStation(a.away, trims[i]);
+        const cxm = p.x + p.nx * mid;
+        const cym = p.y + p.ny * mid;
+        const circle: number[] = [];
+        for (let t = 0; t < 14; t++) {
+          const ang = (2 * Math.PI * t) / 14;
+          circle.push(cxm + r * Math.cos(ang), cym + r * Math.sin(ang));
+        }
+        noses.push({ key: `nose-${i}-${ci}`, element: c.element, kind: c.kind, widthM: c.widthM, polygon: circle });
+      }
+      off -= c.widthM;
+    });
+  });
+
+  const coverBands = internal.map((e) => {
+    const w = e.section
+      ? e.section.components.reduce((s, c) => s + c.widthM, 0)
+      : FALLBACK_WIDTH_M;
+    return ribbonBand(toPts(e.points), w / 2, -w / 2);
+  });
 
   return {
     poly: {
@@ -234,6 +479,8 @@ function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]):
       degree: k,
       polygon: ring,
       coverBands,
+      wedges,
+      noses,
       names: [...new Set(approaches.map((a) => a.edge.name).filter(Boolean))] as string[],
     },
     trims: [
@@ -242,7 +489,6 @@ function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]):
         end: (a.edge.a === a.node ? 'start' : 'end') as 'start' | 'end',
         trim: trims[i],
       })),
-      // Internal edges render nothing — the junction owns their full length.
       ...internal.flatMap((e) => {
         const L = polylineLength(e.points);
         return [
@@ -268,7 +514,6 @@ function transitionForNode(
   trims: Array<{ edgeId: string; end: 'start' | 'end'; trim: number }>;
 } | null {
   if (!eIn.section || !eOut.section) return null;
-  // Orient: eIn traversed TOWARD the node, eOut AWAY — components follow travel direction.
   const inReversed = eIn.b !== nodeId;
   const outReversed = eOut.a !== nodeId;
   const compsIn = orientedComponents(eIn, inReversed);
@@ -295,7 +540,6 @@ function transitionForNode(
   for (let i = startJ; i < partB.length; i++) path.push(partB[i]);
   if (path.length < 4) return null;
 
-  // Alignment factors follow travel orientation (reversal mirrors left/right).
   let fIn = refFraction(eIn.section);
   let fOut = refFraction(eOut.section);
   if (inReversed) fIn = 1 - fIn;
@@ -327,13 +571,12 @@ export function deriveNodeArtifacts(g: GraphState): NodeArtifacts {
   const isJunction = new Set(junctionNodes);
 
   // Pass 1: singleton trims decide which shared edges are consumed.
-  const singleTrim = new Map<string, number>(); // `${edgeId}:${end}` → trim
+  const singleTrim = new Map<string, number>();
   for (const nid of junctionNodes) {
     const res = computeJunction(g, [nid], byNode.get(nid)!);
     res?.trims.forEach((t) => singleTrim.set(`${t.edgeId}:${t.end}`, t.trim));
   }
 
-  // Union-find over junction nodes joined by consumed edges.
   const parent = new Map<string, string>(junctionNodes.map((n) => [n, n]));
   const find = (x: string): string => {
     let r = x;
@@ -362,7 +605,6 @@ export function deriveNodeArtifacts(g: GraphState): NodeArtifacts {
     trims[edgeId] = t;
   };
 
-  // Pass 2: one junction per cluster.
   for (const nodeIds of clusters.values()) {
     const edgeSet = new Map<string, StreetEdge>();
     for (const nid of nodeIds) for (const e of byNode.get(nid)!) edgeSet.set(e.id, e);
@@ -373,7 +615,6 @@ export function deriveNodeArtifacts(g: GraphState): NodeArtifacts {
     }
   }
 
-  // Degree-2 nodes: section transitions.
   for (const [nodeId, edges] of byNode) {
     if (edges.length === 2 && edges[0].id !== edges[1].id) {
       const res = transitionForNode(nodeId, edges[0], edges[1]);

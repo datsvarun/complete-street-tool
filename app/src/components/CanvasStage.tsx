@@ -612,6 +612,32 @@ export function CanvasStage() {
                 strokeScaleEnabled={false}
               />
             ))}
+            {artifacts.junctions.flatMap((j) =>
+              j.wedges.map((b) => (
+                <Line
+                  key={`${j.nodeIds[0]}-${b.key}`}
+                  points={b.polygon}
+                  closed
+                  fill={KIND_COLORS[b.kind]}
+                  stroke="rgba(30,35,40,0.3)"
+                  strokeWidth={0.5}
+                  strokeScaleEnabled={false}
+                />
+              )),
+            )}
+            {artifacts.junctions.flatMap((j) =>
+              j.noses.map((b) => (
+                <Line
+                  key={`${j.nodeIds[0]}-${b.key}`}
+                  points={b.polygon}
+                  closed
+                  fill={KIND_COLORS[b.kind]}
+                  stroke="rgba(30,35,40,0.3)"
+                  strokeWidth={0.5}
+                  strokeScaleEnabled={false}
+                />
+              )),
+            )}
             {artifacts.transitions.flatMap((t) =>
               t.bands.map((b) => (
                 <Line
