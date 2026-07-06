@@ -199,6 +199,20 @@ aside {
   max-height: 340px;
 }
 
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+}
+
+button.mini {
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .small {
   font-size: 12px;
 }

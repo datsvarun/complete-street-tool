@@ -28,34 +28,118 @@ export interface MatchedComponent {
   w2: number; // width in the to-section (0 = dropped)
 }
 
+/** A matching unit: one component, or a carriageway group `cw (median cw)*`
+ *  that must transition as a whole (so divided↔single merges properly). */
+interface MatchToken {
+  kind: string; // ComponentKind or 'cwgroup'
+  comps: SectionComponent[];
+}
+
+function tokenize(s: SectionComponent[]): MatchToken[] {
+  const out: MatchToken[] = [];
+  let i = 0;
+  while (i < s.length) {
+    if (s[i].kind === 'carriageway') {
+      const grp = [s[i]];
+      let j = i + 1;
+      while (j + 1 < s.length && s[j].kind === 'median' && s[j + 1].kind === 'carriageway') {
+        grp.push(s[j], s[j + 1]);
+        j += 2;
+      }
+      out.push({ kind: 'cwgroup', comps: grp });
+      i = j;
+    } else {
+      out.push({ kind: s[i].kind, comps: [s[i]] });
+      i++;
+    }
+  }
+  return out;
+}
+
+const tokenW = (t: MatchToken) => t.comps.reduce((s, c) => s + c.widthM, 0);
+
+/** Aligned entries for two matched carriageway groups. Equal carriageway
+ *  counts pair off positionally; a multi-carriageway group meeting a single
+ *  carriageway splits the single width proportionally so both carriageways
+ *  converge while the median pinches out (a Y-merge, not a taper-to-edge). */
+function expandGroupPair(a: SectionComponent[], b: SectionComponent[]): MatchedComponent[] {
+  const nA = a.filter((c) => c.kind === 'carriageway').length;
+  const nB = b.filter((c) => c.kind === 'carriageway').length;
+  if (nA === nB) {
+    const out: MatchedComponent[] = [];
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const c = a[i] ?? b[i];
+      out.push({ element: c.element, kind: c.kind, w1: a[i]?.widthM ?? 0, w2: b[i]?.widthM ?? 0 });
+    }
+    return out;
+  }
+  const manyIsA = nA > nB;
+  const [many, few] = manyIsA ? [a, b] : [b, a];
+  if (few.length !== 1) {
+    // multi-vs-multi with different counts — rare; plain positional fallback
+    const out: MatchedComponent[] = [];
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+      const c = a[i] ?? b[i];
+      out.push({ element: c.element, kind: c.kind, w1: a[i]?.widthM ?? 0, w2: b[i]?.widthM ?? 0 });
+    }
+    return out;
+  }
+  const cwTotal = many.filter((c) => c.kind === 'carriageway').reduce((s, c) => s + c.widthM, 0);
+  return many.map((c) => {
+    const share = c.kind === 'carriageway' ? few[0].widthM * (c.widthM / cwTotal) : 0;
+    return {
+      element: c.element,
+      kind: c.kind,
+      w1: manyIsA ? c.widthM : share,
+      w2: manyIsA ? share : c.widthM,
+    };
+  });
+}
+
 /**
- * Match components of two sections by kind (LCS over the kind sequence, which
- * approximates curb-inward ordered matching): matched pairs taper, unmatched
+ * Match components of two sections (Plan v2 §3.2.1): width-weighted LCS over
+ * kind tokens — maximising Σ min(w1, w2) keeps the widest components
+ * continuous and makes A→B mirror B→A (an unweighted LCS breaks ties
+ * asymmetrically, so a reordered cycle track tapered out at one node but slid
+ * across the footpath at the next). Matched pairs taper, unmatched
  * from-components drop, unmatched to-components are introduced — merged into
- * one ordered timeline (Plan v2 §3.2.1).
+ * one ordered timeline.
  */
 export function matchComponents(s1: SectionComponent[], s2: SectionComponent[]): MatchedComponent[] {
-  const n = s1.length, m = s2.length;
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  const t1 = tokenize(s1);
+  const t2 = tokenize(s2);
+  const n = t1.length, m = t2.length;
+  const MATCH_BONUS = 0.01; // matching beats not matching even at zero width
+  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
-      lcs[i][j] =
-        s1[i].kind === s2[j].kind
-          ? lcs[i + 1][j + 1] + 1
-          : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      let best = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      if (t1[i].kind === t2[j].kind) {
+        best = Math.max(best, Math.min(tokenW(t1[i]), tokenW(t2[j])) + MATCH_BONUS + dp[i + 1][j + 1]);
+      }
+      dp[i][j] = best;
     }
   }
   const out: MatchedComponent[] = [];
+  const dropTok = (t: MatchToken) =>
+    out.push(...t.comps.map((c) => ({ element: c.element, kind: c.kind, w1: c.widthM, w2: 0 })));
+  const introTok = (t: MatchToken) =>
+    out.push(...t.comps.map((c) => ({ element: c.element, kind: c.kind, w1: 0, w2: c.widthM })));
   let i = 0, j = 0;
+  const EPS = 1e-9;
   while (i < n || j < m) {
-    if (i < n && j < m && s1[i].kind === s2[j].kind && lcs[i][j] === lcs[i + 1][j + 1] + 1) {
-      out.push({ element: s1[i].element, kind: s1[i].kind, w1: s1[i].widthM, w2: s2[j].widthM });
+    if (
+      i < n && j < m && t1[i].kind === t2[j].kind &&
+      Math.abs(dp[i][j] - (Math.min(tokenW(t1[i]), tokenW(t2[j])) + MATCH_BONUS + dp[i + 1][j + 1])) < EPS
+    ) {
+      if (t1[i].kind === 'cwgroup') out.push(...expandGroupPair(t1[i].comps, t2[j].comps));
+      else out.push({ element: t1[i].comps[0].element, kind: t1[i].comps[0].kind, w1: tokenW(t1[i]), w2: tokenW(t2[j]) });
       i++; j++;
-    } else if (i < n && (j >= m || lcs[i + 1][j] >= lcs[i][j + 1])) {
-      out.push({ element: s1[i].element, kind: s1[i].kind, w1: s1[i].widthM, w2: 0 }); // drop
+    } else if (i < n && (j >= m || dp[i + 1][j] >= dp[i][j + 1])) {
+      dropTok(t1[i]);
       i++;
     } else {
-      out.push({ element: s2[j].element, kind: s2[j].kind, w1: 0, w2: s2[j].widthM }); // introduce
+      introTok(t2[j]);
       j++;
     }
   }

@@ -57,6 +57,25 @@ export interface EdgeSection {
   refM?: number;
 }
 
+/** Junction editing state (Plan v2 §4.3, Junction_Tool_Design §3). Stored
+ *  ONLY once the user touches something — the geometry itself stays derived.
+ *  Keys are stable: junction = sorted node ids, corner/approach = edge ends,
+ *  so overrides survive regeneration and go stale (not wrong) when the
+ *  topology changes underneath them. */
+export type JunctionType = 'priority' | 'signalized' | 'roundabout';
+
+export interface CornerOverride {
+  radiusM?: number;
+  chamfer?: boolean;
+}
+
+export interface JunctionDesign {
+  type: JunctionType;
+  cornerOverrides: Record<string, CornerOverride>;
+  approachOverrides: Record<string, { trimM?: number }>;
+  touched: boolean;
+}
+
 /**
  * A stretch of an edge carrying a different section than the base. Anchored
  * parametrically by station (Plan v2 §1.2) so it survives geometry edits.

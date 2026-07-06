@@ -1,6 +1,16 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
-import type { DcCandidate, DraftVert, GraphState, ReviewItem, SectionComponent, Stage, Tool } from './types';
+import type {
+  DcCandidate,
+  DraftVert,
+  GraphState,
+  JunctionDesign,
+  JunctionType,
+  ReviewItem,
+  SectionComponent,
+  Stage,
+  Tool,
+} from './types';
 import {
   commitDraft,
   deleteEdge,
@@ -38,6 +48,10 @@ interface CstState extends GraphState {
   importTarget: LatLon | null;
   selectedEdgeId: string | null;      // primary selection (last clicked)
   selectedEdgeIds: string[];          // full multi-selection (shift-click)
+  /** Junction parameter overrides, keyed by sorted-node-id junction key.
+   *  Only junctions the user touched appear here (Plan v2 §1.2). */
+  junctionDesigns: Record<string, JunctionDesign>;
+  selectedJunctionKey: string | null; // focused junction in stage 2A
   designOpacity: number;              // 0.2–1, sections/junctions layer alpha
   draft: DraftVert[];
   dcCandidates: DcCandidate[] | null; // null = not scanned yet
@@ -81,7 +95,20 @@ interface CstState extends GraphState {
   setHighlight: (ids: string[]) => void;
   setBasemap: (b: Basemap) => void;
   goTo: (p: LatLon, label: string) => void;
+  selectJunction: (key: string | null) => void;
+  setJunctionType: (jKey: string, type: JunctionType) => void;
+  setCornerRadius: (jKey: string, cornerKey: string, radiusM: number | null) => void;
+  toggleCornerChamfer: (jKey: string, cornerKey: string) => void;
+  setApproachTrim: (jKey: string, approachKey: string, trimM: number | null) => void;
+  removeJunctionDesign: (jKey: string) => void;
 }
+
+const EMPTY_DESIGN: JunctionDesign = {
+  type: 'priority',
+  cornerOverrides: {},
+  approachOverrides: {},
+  touched: false,
+};
 
 function graphBounds(g: GraphState): Bounds | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -109,6 +136,8 @@ export const useCst = create<CstState>()(
       importTarget: null,
       selectedEdgeId: null,
       selectedEdgeIds: [],
+      junctionDesigns: {},
+      selectedJunctionKey: null,
       designOpacity: 1,
       draft: [],
       dcCandidates: null,
@@ -408,6 +437,61 @@ export const useCst = create<CstState>()(
             pendingFit: { minX: n.x - 60, minY: n.y - 60, maxX: n.x + 60, maxY: n.y + 60 },
           };
         }),
+
+      selectJunction: (key) => set({ selectedJunctionKey: key }),
+
+      setJunctionType: (jKey, type) =>
+        set((s) => ({
+          junctionDesigns: {
+            ...s.junctionDesigns,
+            [jKey]: { ...(s.junctionDesigns[jKey] ?? EMPTY_DESIGN), type, touched: true },
+          },
+        })),
+
+      setCornerRadius: (jKey, cornerKey, radiusM) =>
+        set((s) => {
+          const d = s.junctionDesigns[jKey] ?? EMPTY_DESIGN;
+          const cornerOverrides = { ...d.cornerOverrides };
+          if (radiusM === null) delete cornerOverrides[cornerKey];
+          else cornerOverrides[cornerKey] = { ...cornerOverrides[cornerKey], radiusM, chamfer: false };
+          return {
+            junctionDesigns: { ...s.junctionDesigns, [jKey]: { ...d, cornerOverrides, touched: true } },
+            statusMsg: radiusM === null ? 'corner reset' : `corner radius ${radiusM.toFixed(1)} m`,
+          };
+        }),
+
+      toggleCornerChamfer: (jKey, cornerKey) =>
+        set((s) => {
+          const d = s.junctionDesigns[jKey] ?? EMPTY_DESIGN;
+          const prev = d.cornerOverrides[cornerKey];
+          const cornerOverrides = {
+            ...d.cornerOverrides,
+            [cornerKey]: { ...prev, chamfer: !prev?.chamfer },
+          };
+          return {
+            junctionDesigns: { ...s.junctionDesigns, [jKey]: { ...d, cornerOverrides, touched: true } },
+            statusMsg: cornerOverrides[cornerKey].chamfer ? 'corner chamfered' : 'corner filleted',
+          };
+        }),
+
+      setApproachTrim: (jKey, approachKey, trimM) =>
+        set((s) => {
+          const d = s.junctionDesigns[jKey] ?? EMPTY_DESIGN;
+          const approachOverrides = { ...d.approachOverrides };
+          if (trimM === null) delete approachOverrides[approachKey];
+          else approachOverrides[approachKey] = { trimM };
+          return {
+            junctionDesigns: { ...s.junctionDesigns, [jKey]: { ...d, approachOverrides, touched: true } },
+            statusMsg: trimM === null ? 'approach reset' : `approach trim ${trimM.toFixed(1)} m`,
+          };
+        }),
+
+      removeJunctionDesign: (jKey) =>
+        set((s) => {
+          const junctionDesigns = { ...s.junctionDesigns };
+          delete junctionDesigns[jKey];
+          return { junctionDesigns, statusMsg: 'junction overrides removed' };
+        }),
     }),
     {
       // Only the graph core participates in undo history.
@@ -418,8 +502,10 @@ export const useCst = create<CstState>()(
         nextEdgeNum: s.nextEdgeNum,
         origin: s.origin,
         selectedEdgeId: s.selectedEdgeId,
+        junctionDesigns: s.junctionDesigns,
       }),
-      equality: (a, b) => a.nodes === b.nodes && a.edges === b.edges,
+      equality: (a, b) =>
+        a.nodes === b.nodes && a.edges === b.edges && a.junctionDesigns === b.junctionDesigns,
       limit: 100,
     },
   ),

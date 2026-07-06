@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Line, Circle, Ring } from 'react-konva';
+import { Stage, Layer, Line, Circle, Ring, Rect, Arrow } from 'react-konva';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
@@ -12,7 +12,7 @@ import { nodeClassOf } from '../types';
 import type { GraphNode, Snap, StreetEdge, Tool } from '../types';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifacts } from '../graph/junctions';
-import type { EdgeTrim } from '../graph/junctions';
+import type { EdgeTrim, JunctionPoly } from '../graph/junctions';
 
 Konva.dragDistance = 3; // don't treat a pan drag as a click
 
@@ -382,6 +382,111 @@ function findSnap(
   return best;
 }
 
+const TURN_COLORS: Record<string, string> = {
+  through: '#4a90d9',
+  left: '#4CAF50',
+  right: '#e08e45',
+  uturn: '#999999',
+};
+
+/** Focused-junction editing layer (J3+J4): movement arrows, draggable corner
+ *  radius dots and approach trim squares. Everything edits parameters with
+ *  stable keys — geometry regenerates live. */
+function JunctionHandlesLayer({ j, scale }: { j: JunctionPoly; scale: number }) {
+  const setCornerRadius = useCst((s) => s.setCornerRadius);
+  const toggleCornerChamfer = useCst((s) => s.toggleCornerChamfer);
+  const setApproachTrim = useCst((s) => s.setApproachTrim);
+  const r = 6 / scale;
+
+  return (
+    <Layer>
+      {j.movements.map((m) => (
+        <Arrow
+          key={`${m.from}>${m.to}`}
+          points={m.pts}
+          stroke={TURN_COLORS[m.turn]}
+          fill={TURN_COLORS[m.turn]}
+          strokeWidth={1.5}
+          strokeScaleEnabled={false}
+          pointerLength={7 / scale}
+          pointerWidth={5 / scale}
+          opacity={0.8}
+          listening={false}
+        />
+      ))}
+      {j.corners.map((c) => (
+        <Circle
+          key={c.key}
+          x={c.x}
+          y={c.y}
+          radius={r}
+          fill={c.overridden ? '#e08e45' : '#fff'}
+          stroke="#b3541e"
+          strokeWidth={1.5}
+          strokeScaleEnabled={false}
+          draggable
+          onDragStart={(ev) => {
+            useCst.temporal.getState().pause();
+            (ev.target as Konva.Shape).setAttr('dragFrom', { x: c.x, y: c.y, r: c.radiusM ?? 4 });
+          }}
+          onDragMove={(ev) => {
+            const from = (ev.target as Konva.Shape).getAttr('dragFrom') as { x: number; y: number; r: number };
+            const d = (ev.target.x() - from.x) * c.bx + (ev.target.y() - from.y) * c.by;
+            const radius = Math.min(30, Math.max(MIN_JUNCTION_R, Math.round((from.r + d) * 2) / 2));
+            setCornerRadius(j.key, c.key, radius);
+          }}
+          onDragEnd={(ev) => {
+            useCst.temporal.getState().resume();
+            // snap the handle back onto the regenerated arc midpoint
+            ev.target.position({ x: c.x, y: c.y });
+          }}
+          onContextMenu={(ev) => {
+            ev.evt.preventDefault();
+            ev.cancelBubble = true;
+            if (ev.evt.shiftKey) setCornerRadius(j.key, c.key, null);
+            else toggleCornerChamfer(j.key, c.key);
+          }}
+        />
+      ))}
+      {j.approachInfos.map((a) => (
+        <Rect
+          key={a.key}
+          x={a.x - r * 0.9}
+          y={a.y - r * 0.9}
+          width={r * 1.8}
+          height={r * 1.8}
+          fill={a.overridden ? '#e08e45' : '#fff'}
+          stroke="#b3541e"
+          strokeWidth={1.5}
+          strokeScaleEnabled={false}
+          draggable
+          onDragStart={(ev) => {
+            useCst.temporal.getState().pause();
+            (ev.target as Konva.Shape).setAttr('dragFrom', { x: ev.target.x(), y: ev.target.y(), trim: a.trim });
+          }}
+          onDragMove={(ev) => {
+            const from = (ev.target as Konva.Shape).getAttr('dragFrom') as { x: number; y: number; trim: number };
+            const d = (ev.target.x() - from.x) * a.dx + (ev.target.y() - from.y) * a.dy;
+            const trim = Math.min(a.maxTrim, Math.max(0.5, Math.round((from.trim + d) * 2) / 2));
+            setApproachTrim(j.key, a.key, trim);
+          }}
+          onDragEnd={(ev) => {
+            useCst.temporal.getState().resume();
+            ev.target.position({ x: a.x - r * 0.9, y: a.y - r * 0.9 });
+          }}
+          onContextMenu={(ev) => {
+            ev.evt.preventDefault();
+            ev.cancelBubble = true;
+            setApproachTrim(j.key, a.key, null);
+          }}
+        />
+      ))}
+    </Layer>
+  );
+}
+
+const MIN_JUNCTION_R = 1;
+
 export function CanvasStage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -398,6 +503,9 @@ export function CanvasStage() {
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
   const selectedEdgeIds = useCst((s) => s.selectedEdgeIds);
+  const junctionDesigns = useCst((s) => s.junctionDesigns);
+  const selectedJunctionKey = useCst((s) => s.selectedJunctionKey);
+  const selectJunction = useCst((s) => s.selectJunction);
   const designOpacity = useCst((s) => s.designOpacity);
   const highlightEdges = useCst((s) => s.highlightEdges);
   const draft = useCst((s) => s.draft);
@@ -419,10 +527,14 @@ export function CanvasStage() {
   const artifacts = useMemo(
     () =>
       showSections
-        ? deriveNodeArtifacts({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 })
+        ? deriveNodeArtifacts({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns)
         : { junctions: [], transitions: [], trims: {} },
-    [nodes, edges, showSections],
+    [nodes, edges, showSections, junctionDesigns],
   );
+  const focusedJunction =
+    stage === 'junctions' && selectedJunctionKey
+      ? artifacts.junctions.find((j) => j.key === selectedJunctionKey) ?? null
+      : null;
 
   useEffect(() => {
     const el = containerRef.current!;
@@ -595,7 +707,7 @@ export function CanvasStage() {
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
         {showSections && (
-          <Layer listening={false} opacity={designOpacity}>
+          <Layer listening={stage === 'junctions'} opacity={designOpacity}>
             {artifacts.junctions.flatMap((j) =>
               j.coverBands.map((b, bi) => (
                 <Line key={`${j.nodeIds[0]}-cover${bi}`} points={b} closed fill="#525e6a" listening={false} />
@@ -603,13 +715,21 @@ export function CanvasStage() {
             )}
             {artifacts.junctions.map((j) => (
               <Line
-                key={j.nodeIds.join('+')}
+                key={j.key}
                 points={j.polygon}
                 closed
                 fill="#525e6a"
-                stroke={stage === 'junctions' ? '#e08e45' : 'rgba(30,35,40,0.4)'}
-                strokeWidth={stage === 'junctions' ? 1.5 : 0.6}
+                stroke={
+                  stage === 'junctions'
+                    ? j.key === selectedJunctionKey
+                      ? '#e08e45'
+                      : 'rgba(224,142,69,0.55)'
+                    : 'rgba(30,35,40,0.4)'
+                }
+                strokeWidth={stage === 'junctions' ? (j.key === selectedJunctionKey ? 2 : 1) : 0.6}
                 strokeScaleEnabled={false}
+                opacity={focusedJunction && j.key !== selectedJunctionKey ? 0.45 : 1}
+                onClick={stage === 'junctions' ? () => selectJunction(j.key) : undefined}
               />
             ))}
             {artifacts.junctions.flatMap((j) =>
@@ -622,6 +742,7 @@ export function CanvasStage() {
                   stroke="rgba(30,35,40,0.3)"
                   strokeWidth={0.5}
                   strokeScaleEnabled={false}
+                  listening={false}
                 />
               )),
             )}
@@ -635,6 +756,7 @@ export function CanvasStage() {
                   stroke="rgba(30,35,40,0.3)"
                   strokeWidth={0.5}
                   strokeScaleEnabled={false}
+                  listening={false}
                 />
               )),
             )}
@@ -648,6 +770,7 @@ export function CanvasStage() {
                   stroke="rgba(30,35,40,0.35)"
                   strokeWidth={0.6}
                   strokeScaleEnabled={false}
+                  listening={false}
                 />
               )),
             )}
@@ -671,6 +794,7 @@ export function CanvasStage() {
             draggable={tool === 'select'}
           />
         )}
+        {focusedJunction && <JunctionHandlesLayer j={focusedJunction} scale={view.scale} />}
         <Layer listening={false}>
           {draftFlat.length >= 4 && (
             <Line points={draftFlat} stroke="#b3541e" strokeWidth={2} strokeScaleEnabled={false} />

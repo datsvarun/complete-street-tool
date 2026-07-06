@@ -9,7 +9,13 @@
 // - median noses: divided approaches end in a rounded cap at the mouth
 // - clusters: colliding junctions merge (union-find) into one complex junction
 // - degree-2 section transitions: the node is the transition point
-import type { GraphState, SectionComponent, StreetEdge } from '../types';
+import type {
+  CornerOverride,
+  GraphState,
+  JunctionDesign,
+  SectionComponent,
+  StreetEdge,
+} from '../types';
 import {
   dedupe as dedupePts,
   dist,
@@ -65,7 +71,44 @@ function defaultRadius(a?: string, b?: string): number {
 // everything else is a raised component that wraps corners as a wedge.
 const DRIVABLE = new Set(['carriageway', 'mixed', 'service', 'brt', 'parking']);
 
+/** Corner handle metadata: identity + where to draw/drag it. */
+export interface CornerInfo {
+  key: string;         // `${edgeId}:${end}|${edgeId}:${end}` — stable across regeneration
+  x: number;           // arc midpoint
+  y: number;
+  bx: number;          // unit vector from the midpoint toward the junction centre
+  by: number;          //   (drag axis: inward = larger radius)
+  radiusM: number | null; // null = chamfer
+  overridden: boolean;
+}
+
+/** Approach (junction mouth) handle metadata. */
+export interface ApproachInfo {
+  key: string;         // `${edgeId}:${end}`
+  edgeId: string;
+  x: number;           // centerline point at the mouth
+  y: number;
+  dx: number;          // unit vector along the centerline, away from the junction
+  dy: number;
+  trim: number;
+  maxTrim: number;
+  overridden: boolean;
+  entry: boolean;      // traffic may arrive at the junction on this approach
+  exit: boolean;       // traffic may leave on it
+}
+
+export type TurnKind = 'left' | 'through' | 'right' | 'uturn';
+
+/** One allowed movement between two approaches (Phase 2.5 / slice J4). */
+export interface Movement {
+  from: string;        // approach key
+  to: string;
+  turn: TurnKind;
+  pts: number[];       // arrow path across the junction
+}
+
 export interface JunctionPoly {
+  key: string;         // sorted node ids — JunctionDesign lookup key
   nodeIds: string[];
   degree: number;      // number of approaches
   polygon: number[];   // carriageway surface (curb ring with fillet arcs)
@@ -73,6 +116,9 @@ export interface JunctionPoly {
   wedges: RibbonBand[];   // corner wedges bridging raised stacks
   noses: RibbonBand[];    // median nose caps
   names: string[];
+  corners: CornerInfo[];
+  approachInfos: ApproachInfo[];
+  movements: Movement[];
 }
 
 export interface NodeTransition {
@@ -250,10 +296,11 @@ interface Corner {
   sTBcurb: number;      // tangent station on B's left curb
   clA: number;          // centerline trim demanded on A
   clB: number;          // centerline trim demanded on B
+  radiusM: number | null; // radius actually used (null = chamfer fallback)
 }
 
 /** Tangent arc of radius R between a's right curb and b's left curb; shrinks R to fit. */
-function solveCorner(a: Approach, b: Approach): Corner {
+function solveCorner(a: Approach, b: Approach, ov?: CornerOverride): Corner {
   const capA = a.len * MAX_TANGENT_FRACTION;
   const capB = b.len * MAX_TANGENT_FRACTION;
 
@@ -270,9 +317,9 @@ function solveCorner(a: Approach, b: Approach): Corner {
     rowB = Math.min(projectOnPolyline(b.away, rowHit.x, rowHit.y)?.station ?? MIN_TRIM_M, capB);
   }
 
-  let R = defaultRadius(a.edge.highway, b.edge.highway);
+  let R = ov?.radiusM ?? defaultRadius(a.edge.highway, b.edge.highway);
 
-  while (R >= MIN_RADIUS_M) {
+  while (!ov?.chamfer && R >= MIN_RADIUS_M) {
     // The fillet centre sits in the corner quadrant (inside the block corner),
     // R beyond each curb on the NON-drivable side — offsetting toward the
     // centreline instead puts tangents on the node side and the arc doubles back.
@@ -311,7 +358,7 @@ function solveCorner(a: Approach, b: Approach): Corner {
             const t = a0 + (sweep * k) / N;
             arc.push(center.x + R * Math.cos(t), center.y + R * Math.sin(t));
           }
-          return { arc, sTAcurb: pA.station, sTBcurb: pB.station, clA: Math.max(clA, rowA), clB: Math.max(clB, rowB) };
+          return { arc, sTAcurb: pA.station, sTBcurb: pB.station, clA: Math.max(clA, rowA), clB: Math.max(clB, rowB), radiusM: R };
         }
       }
     }
@@ -337,6 +384,7 @@ function solveCorner(a: Approach, b: Approach): Corner {
     sTBcurb: sB,
     clA: Math.max(Math.min(projectOnPolyline(a.away, qA.x, qA.y)?.station ?? sA, capA), rowA),
     clB: Math.max(Math.min(projectOnPolyline(b.away, qB.x, qB.y)?.station ?? sB, capB), rowB),
+    radiusM: null,
   };
 }
 
@@ -345,7 +393,24 @@ interface ClusterResult {
   trims: Array<{ edgeId: string; end: 'start' | 'end'; trim: number }>;
 }
 
-function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]): ClusterResult | null {
+const endOf = (e: StreetEdge, node: string): 'start' | 'end' => (e.a === node ? 'start' : 'end');
+const approachKey = (a: Approach) => `${a.edge.id}:${endOf(a.edge, a.node)}`;
+
+function classifyTurn(dInX: number, dInY: number, dOutX: number, dOutY: number): TurnKind {
+  // Signed angle from the entry direction to the exit direction; in y-down
+  // coordinates a positive angle is a clockwise (right, LHT) turn.
+  const deg = (Math.atan2(dInX * dOutY - dInY * dOutX, dInX * dOutX + dInY * dOutY) * 180) / Math.PI;
+  if (Math.abs(deg) <= 30) return 'through';
+  if (Math.abs(deg) >= 150) return 'uturn';
+  return deg > 0 ? 'right' : 'left';
+}
+
+function computeJunction(
+  g: GraphState,
+  nodeIds: string[],
+  edges: StreetEdge[],
+  design?: JunctionDesign,
+): ClusterResult | null {
   const inCluster = new Set(nodeIds);
   const approachesRaw: Array<{ edge: StreetEdge; node: string }> = [];
   const internal: StreetEdge[] = [];
@@ -366,16 +431,25 @@ function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]):
     .sort((p, q) => p.angle - q.angle); // ascending atan2 = clockwise in y-down
 
   const k = approaches.length;
+  const cornerKeys: string[] = [];
   const corners: Corner[] = [];
   for (let i = 0; i < k; i++) {
-    corners.push(solveCorner(approaches[i], approaches[(i + 1) % k]));
+    const a = approaches[i];
+    const b = approaches[(i + 1) % k];
+    const key = `${approachKey(a)}|${approachKey(b)}`;
+    cornerKeys.push(key);
+    corners.push(solveCorner(a, b, design?.cornerOverrides[key]));
   }
 
-  // Ribbon trim per approach: the larger tangent demand of its two corners.
+  // Ribbon trim per approach: the larger tangent demand of its two corners,
+  // unless the user pinned this mouth explicitly.
   const trims: number[] = approaches.map((a, i) => {
+    const maxTrim = a.len * MAX_TANGENT_FRACTION;
+    const ovTrim = design?.approachOverrides[approachKey(a)]?.trimM;
+    if (ovTrim !== undefined) return Math.min(Math.max(0.5, ovTrim), maxTrim);
     const demandL = corners[(i - 1 + k) % k].clB; // corner on my left curb
     const demandR = corners[i].clA;               // corner on my right curb
-    return Math.min(Math.max(MIN_TRIM_M, demandL, demandR), a.len * MAX_TANGENT_FRACTION);
+    return Math.min(Math.max(MIN_TRIM_M, demandL, demandR), maxTrim);
   });
 
   // Surface ring: mouth caps at curb offsets + curb segments + fillet arcs.
@@ -473,8 +547,65 @@ function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]):
     return ribbonBand(toPts(e.points), w / 2, -w / 2);
   });
 
+  // Handle metadata: corner dots on arc midpoints, approach squares at mouths.
+  const cornerInfos: CornerInfo[] = corners.map((c, i) => {
+    const len = polylineLength(c.arc);
+    const mid = pointAtStation(c.arc, len / 2);
+    const d = Math.max(dist(mid.x, mid.y, cx, cy), 1e-6);
+    return {
+      key: cornerKeys[i],
+      x: mid.x,
+      y: mid.y,
+      bx: (cx - mid.x) / d,
+      by: (cy - mid.y) / d,
+      radiusM: c.radiusM,
+      overridden: !!design?.cornerOverrides[cornerKeys[i]],
+    };
+  });
+
+  const approachInfos: ApproachInfo[] = approaches.map((a, i) => {
+    const p = pointAtStation(a.away, trims[i]);
+    // away-tangent from the left normal (n = (ty, -tx) → t = (-ny, nx))
+    const key = approachKey(a);
+    const isEnd = endOf(a.edge, a.node) === 'end';
+    return {
+      key,
+      edgeId: a.edge.id,
+      x: p.x,
+      y: p.y,
+      dx: -p.ny,
+      dy: p.nx,
+      trim: trims[i],
+      maxTrim: a.len * MAX_TANGENT_FRACTION,
+      overridden: design?.approachOverrides[key]?.trimM !== undefined,
+      entry: !a.edge.oneway || isEnd,  // oneway travels a→b: arrives here only at its b end
+      exit: !a.edge.oneway || !isEnd,
+    };
+  });
+
+  // Movement graph (J4): every permitted entry→exit pair, classified by the
+  // signed turn angle (left-hand traffic; right turns cross the junction).
+  const movements: Movement[] = [];
+  approachInfos.forEach((ain) => {
+    if (!ain.entry) return;
+    approachInfos.forEach((aout) => {
+      if (aout === ain || !aout.exit) return;
+      const turn = classifyTurn(-ain.dx, -ain.dy, aout.dx, aout.dy);
+      const pts: number[] = [];
+      for (let t = 0; t <= 1.0001; t += 1 / 12) {
+        const u = 1 - t;
+        pts.push(
+          u * u * ain.x + 2 * u * t * cx + t * t * aout.x,
+          u * u * ain.y + 2 * u * t * cy + t * t * aout.y,
+        );
+      }
+      movements.push({ from: ain.key, to: aout.key, turn, pts });
+    });
+  });
+
   return {
     poly: {
+      key: [...nodeIds].sort().join('+'),
       nodeIds,
       degree: k,
       polygon: ring,
@@ -482,6 +613,9 @@ function computeJunction(g: GraphState, nodeIds: string[], edges: StreetEdge[]):
       wedges,
       noses,
       names: [...new Set(approaches.map((a) => a.edge.name).filter(Boolean))] as string[],
+      corners: cornerInfos,
+      approachInfos,
+      movements,
     },
     trims: [
       ...approaches.map((a, i) => ({
@@ -556,7 +690,10 @@ function transitionForNode(
 }
 
 /** One pass over all nodes → junction polygons (merged where colliding), node transitions, edge trims. */
-export function deriveNodeArtifacts(g: GraphState): NodeArtifacts {
+export function deriveNodeArtifacts(
+  g: GraphState,
+  designs?: Record<string, JunctionDesign>,
+): NodeArtifacts {
   const byNode = new Map<string, StreetEdge[]>();
   for (const e of Object.values(g.edges)) {
     for (const nid of [e.a, e.b]) {
@@ -608,7 +745,7 @@ export function deriveNodeArtifacts(g: GraphState): NodeArtifacts {
   for (const nodeIds of clusters.values()) {
     const edgeSet = new Map<string, StreetEdge>();
     for (const nid of nodeIds) for (const e of byNode.get(nid)!) edgeSet.set(e.id, e);
-    const res = computeJunction(g, nodeIds, [...edgeSet.values()]);
+    const res = computeJunction(g, nodeIds, [...edgeSet.values()], designs?.[[...nodeIds].sort().join('+')]);
     if (res) {
       junctions.push(res.poly);
       res.trims.forEach((t) => addTrim(t.edgeId, t.end, t.trim));
