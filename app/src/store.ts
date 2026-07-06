@@ -57,6 +57,7 @@ interface CstState extends GraphState {
   focusNode: (nodeId: string) => void;
   moveNodeTo: (id: string, x: number, y: number) => void;
   mergeNodePair: (keep: string, drop: string) => void;
+  weldNodeToEdge: (nodeId: string, edgeId: string, x: number, y: number) => void;
   splitEdgeAt: (edgeId: string, x: number, y: number) => void;
   simplifyAll: (tolM: number) => void;
   cleanNetwork: () => void;
@@ -187,6 +188,16 @@ export const useCst = create<CstState>()(
 
       mergeNodePair: (keep, drop) =>
         set((s) => ({ ...mergeNodes(pickGraph(s), keep, drop), statusMsg: `merged ${drop} into ${keep}` })),
+
+      // Drop a node onto an edge: split the edge there and weld the node in
+      // (one undoable step). The dragged node's streets rewire to the split point.
+      weldNodeToEdge: (nodeId, edgeId, x, y) =>
+        set((s) => {
+          const res = splitEdge(pickGraph(s), edgeId, x, y);
+          if (!res.nodeId || res.nodeId === nodeId) return {};
+          const g = mergeNodes(res.g, res.nodeId, nodeId);
+          return { ...g, dcCandidates: null, statusMsg: `${nodeId} welded into ${edgeId} at ${res.nodeId}` };
+        }),
 
       splitEdgeAt: (edgeId, x, y) =>
         set((s) => {

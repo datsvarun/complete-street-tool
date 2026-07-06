@@ -202,6 +202,7 @@ function NodesLayerImpl({
 }) {
   const moveNodeTo = useCst((s) => s.moveNodeTo);
   const mergeNodePair = useCst((s) => s.mergeNodePair);
+  const weldNodeToEdge = useCst((s) => s.weldNodeToEdge);
   const r = 3.5 / scale;
   return (
     <Layer>
@@ -223,12 +224,26 @@ function NodesLayerImpl({
             const x = e.target.x();
             const y = e.target.y();
             moveNodeTo(n.id, x, y);
-            // Drop onto another node → merge (Plan v2 §2.3 cleaning toolkit)
+            // Drop onto another node → merge; onto an edge → split + weld
+            // (Plan v2 §2.3 cleaning toolkit)
             const tol = NODE_MERGE_PX / scale;
-            const target = Object.values(useCst.getState().nodes).find(
+            const state = useCst.getState();
+            const target = Object.values(state.nodes).find(
               (m) => m.id !== n.id && dist(m.x, m.y, x, y) < tol,
             );
-            if (target) mergeNodePair(target.id, n.id);
+            if (target) {
+              mergeNodePair(target.id, n.id);
+              return;
+            }
+            let bestEdge: { id: string; d: number } | null = null;
+            for (const e of Object.values(state.edges)) {
+              if (e.a === n.id || e.b === n.id) continue; // not its own streets
+              const proj = projectOnPolyline(e.points, x, y);
+              if (proj && proj.dist < tol && (!bestEdge || proj.dist < bestEdge.d)) {
+                bestEdge = { id: e.id, d: proj.dist };
+              }
+            }
+            if (bestEdge) weldNodeToEdge(n.id, bestEdge.id, x, y);
           }}
         />
       ))}

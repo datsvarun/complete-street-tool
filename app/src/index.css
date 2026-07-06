@@ -315,7 +315,10 @@ aside {
   overflow: hidden;
 }
 
-.basemap {
+/* Must out-rank maplibre-gl.css's `.maplibregl-map { position: relative }`,
+   which loads later and would collapse the container to zero height. */
+.canvas-host > .basemap.maplibregl-map,
+.canvas-host > .basemap {
   position: absolute;
   inset: 0;
 }
