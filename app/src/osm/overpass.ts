@@ -1,9 +1,27 @@
 // OSM import: Overpass query → node-edge graph in the local metric CRS
-// (Plan v2 §2.1 / Case_Study §1.7). Lat/lon exists only inside this module.
+// (Plan v2 §2.1 / Case_Study §1.7). Lat/lon exists only at this boundary —
+// the projection origin is the one link between local metres and the world.
 import type { GraphState } from '../types';
 
 // Pune, Ganeshkhind Rd / Shivajinagar — messy: dual carriageway, flyover, service alleys.
 export const DEFAULT_IMPORT = { lat: 18.5289, lon: 73.8478, radiusM: 250 };
+
+export interface LatLon {
+  lat: number;
+  lon: number;
+}
+
+const K = 111320; // metres per degree latitude (local equirectangular)
+
+export function toLocal(origin: LatLon, p: LatLon): { x: number; y: number } {
+  const kLon = K * Math.cos((origin.lat * Math.PI) / 180);
+  return { x: (p.lon - origin.lon) * kLon, y: -(p.lat - origin.lat) * K };
+}
+
+export function toLatLon(origin: LatLon, x: number, y: number): LatLon {
+  const kLon = K * Math.cos((origin.lat * Math.PI) / 180);
+  return { lat: origin.lat - y / K, lon: origin.lon + x / kLon };
+}
 
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
@@ -39,15 +57,17 @@ export async function fetchOverpass(lat: number, lon: number, radiusM: number): 
 
 /**
  * OSM ways → GraphState: keep street classes, split ways at shared nodes,
- * project to a local metric CRS centered on the data (y grows south/down).
+ * project to a local metric CRS around `center` (y grows south/down).
+ * The caller stores `center` as the graph's projection origin.
  */
-export function parseOsm(data: OsmJson): GraphState {
+export function parseOsm(data: OsmJson, center: LatLon): GraphState {
   const osmNodes = new Map<number, OsmNode>();
   const ways: OsmWay[] = [];
   for (const el of data.elements) {
     if (el.type === 'node') osmNodes.set(el.id, el);
     else if (el.type === 'way' && el.tags?.highway && KEEP.has(el.tags.highway)) ways.push(el);
   }
+  const proj = (n: OsmNode) => toLocal(center, n);
 
   // Usage count decides where ways get split: shared nodes become graph nodes.
   const usage = new Map<number, number>();
@@ -57,19 +77,6 @@ export function parseOsm(data: OsmJson): GraphState {
       usage.set(nid, (usage.get(nid) ?? 0) + (isEnd ? 2 : 1));
     });
   }
-
-  // Local equirectangular projection centered on the mean of used nodes.
-  let latSum = 0, lonSum = 0, count = 0;
-  for (const w of ways) for (const nid of w.nodes) {
-    const n = osmNodes.get(nid);
-    if (n) { latSum += n.lat; lonSum += n.lon; count += 1; }
-  }
-  if (count === 0) return { nodes: {}, edges: {}, nextNodeNum: 1, nextEdgeNum: 1 };
-  const lat0 = latSum / count;
-  const lon0 = lonSum / count;
-  const K = 111320; // metres per degree latitude
-  const kLon = K * Math.cos((lat0 * Math.PI) / 180);
-  const proj = (n: OsmNode) => ({ x: (n.lon - lon0) * kLon, y: -(n.lat - lat0) * K });
 
   const g: GraphState = { nodes: {}, edges: {}, nextNodeNum: 1, nextEdgeNum: 1 };
   const nodeIdFor = new Map<number, string>();

@@ -13,7 +13,8 @@ import {
 } from './graph/ops';
 import { runStandardPipeline } from './graph/transforms';
 import { detectDualCarriageways, mergeDualCarriageway } from './graph/dualCarriageway';
-import { fetchOverpass, parseOsm, DEFAULT_IMPORT } from './osm/overpass';
+import { fetchOverpass, parseOsm, toLocal, DEFAULT_IMPORT } from './osm/overpass';
+import type { LatLon } from './osm/overpass';
 import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
 import { polylineLength } from './geometry/polyline';
@@ -23,9 +24,16 @@ import { polylineLength } from './geometry/polyline';
 
 export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
 
+export type Basemap = 'none' | 'osm' | 'sat';
+
 interface CstState extends GraphState {
   stage: Stage;
   tool: Tool;
+  /** Projection origin: lat/lon of local (0,0). Set by import or geocoding. */
+  origin: LatLon | null;
+  basemap: Basemap;
+  /** Last geocoded place — NetworkPanel syncs its import fields to this. */
+  importTarget: LatLon | null;
   selectedEdgeId: string | null;
   draft: DraftVert[];
   selectedOverrideId: string | null; // section edits target this override when set
@@ -62,6 +70,8 @@ interface CstState extends GraphState {
   scanDualCarriageways: () => void;
   applyDcMerge: (c: DcCandidate) => void;
   setHighlight: (ids: string[]) => void;
+  setBasemap: (b: Basemap) => void;
+  goTo: (p: LatLon, label: string) => void;
 }
 
 function graphBounds(g: GraphState): Bounds | null {
@@ -83,6 +93,9 @@ export const useCst = create<CstState>()(
       ...EMPTY_GRAPH,
       stage: 'network',
       tool: 'select',
+      origin: null,
+      basemap: 'none',
+      importTarget: null,
       selectedEdgeId: null,
       selectedOverrideId: null,
       draft: [],
@@ -271,10 +284,11 @@ export const useCst = create<CstState>()(
         set({ importBusy: true, statusMsg: 'Fetching from Overpass…' });
         try {
           const data = await fetchOverpass(lat, lon, radiusM);
-          const g = parseOsm(data);
+          const g = parseOsm(data, { lat, lon });
           const cleaned = runStandardPipeline(g);
           set({
             ...cleaned.g,
+            origin: { lat, lon },
             importBusy: false,
             selectedEdgeId: null,
             dcCandidates: null,
@@ -290,10 +304,11 @@ export const useCst = create<CstState>()(
       loadSample: async () => {
         set({ importBusy: true, statusMsg: 'Loading Pune sample…' });
         const data = (await import('./data/pune-sample.json')).default as unknown as Parameters<typeof parseOsm>[0];
-        const g = parseOsm(data);
+        const g = parseOsm(data, DEFAULT_IMPORT);
         const cleaned = runStandardPipeline(g);
         set({
           ...cleaned.g,
+          origin: { lat: DEFAULT_IMPORT.lat, lon: DEFAULT_IMPORT.lon },
           importBusy: false,
           selectedEdgeId: null,
           dcCandidates: null,
@@ -321,6 +336,27 @@ export const useCst = create<CstState>()(
         })),
 
       setHighlight: (ids) => set({ highlightEdges: ids }),
+
+      setBasemap: (b) => set({ basemap: b }),
+
+      goTo: (p, label) =>
+        set((s) => {
+          if (!s.origin) {
+            // Nothing anchored yet: the searched place becomes the origin.
+            return {
+              origin: p,
+              importTarget: p,
+              pendingFit: { minX: -260, minY: -260, maxX: 260, maxY: 260 },
+              statusMsg: `Centered on ${label}`,
+            };
+          }
+          const { x, y } = toLocal(s.origin, p);
+          return {
+            importTarget: p,
+            pendingFit: { minX: x - 260, minY: y - 260, maxX: x + 260, maxY: y + 260 },
+            statusMsg: `Centered on ${label} — importing here replaces the current network`,
+          };
+        }),
     }),
     {
       // Only the graph core participates in undo history.
@@ -329,6 +365,7 @@ export const useCst = create<CstState>()(
         edges: s.edges,
         nextNodeNum: s.nextNodeNum,
         nextEdgeNum: s.nextEdgeNum,
+        origin: s.origin,
         selectedEdgeId: s.selectedEdgeId,
       }),
       equality: (a, b) => a.nodes === b.nodes && a.edges === b.edges,

@@ -5,6 +5,7 @@ import { NetworkPanel } from './components/NetworkPanel';
 import { SectionsPanel } from './components/SectionsPanel';
 import { CanvasStage } from './components/CanvasStage';
 import { StripEditor } from './components/StripEditor';
+import { GeocodeSearch } from './components/GeocodeSearch';
 
 export default function App() {
   const stage = useCst((s) => s.stage);
@@ -42,6 +43,7 @@ export default function App() {
           CST <span className="muted">· IRC Street Designer</span>
         </span>
         <StageTabs />
+        <GeocodeSearch />
         <div className="header-actions">
           <button onClick={() => useCst.temporal.getState().undo()} title="Undo (Ctrl+Z)">
             ↩

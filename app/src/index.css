@@ -311,6 +311,92 @@ aside {
   overflow: hidden;
 }
 
+.basemap {
+  position: absolute;
+  inset: 0;
+}
+
+.canvas-host > div:not(.basemap):not(.status-bar) {
+  position: relative; /* keep the Konva stage above the basemap */
+}
+
+.basemap .maplibregl-ctrl-bottom-right {
+  bottom: 28px; /* clear the status bar */
+}
+
+.basemap-pick select {
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font: inherit;
+  padding: 1px 4px;
+}
+
+.geocode {
+  position: relative;
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+
+.geocode input {
+  width: 240px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.geocode > button {
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.geocode-results {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  width: 340px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  box-shadow: 0 6px 18px rgba(20, 30, 40, 0.18);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+}
+
+.geocode-results button {
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  padding: 8px 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.geocode-results button:hover {
+  background: var(--accent-bg);
+}
+
+.geocode-error {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--danger-text);
+}
+
 .status-bar {
   position: absolute;
   left: 0;

@@ -4,6 +4,7 @@ import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
 import { KIND_COLORS } from '../catalog';
+import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
 import { pointAtStation, projectOnPolyline, dist, subPolyline } from '../geometry/polyline';
 import { nodeClassOf } from '../types';
@@ -341,6 +342,9 @@ export function CanvasStage() {
 
   const stage = useCst((s) => s.stage);
   const tool = useCst((s) => s.tool);
+  const origin = useCst((s) => s.origin);
+  const basemap = useCst((s) => s.basemap);
+  const setBasemap = useCst((s) => s.setBasemap);
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
@@ -481,12 +485,23 @@ export function CanvasStage() {
 
   const draftFlat = draft.flatMap((v) => [v.x, v.y]);
 
+  const basemapActive = basemap !== 'none' && !!origin;
+
   return (
     <div
       ref={containerRef}
-      className="canvas-host"
+      className={basemapActive ? 'canvas-host with-basemap' : 'canvas-host'}
       style={{ cursor: tool === 'draw' ? 'crosshair' : tool === 'split' ? 'cell' : 'grab' }}
     >
+      {basemapActive && (
+        <Basemap
+          kind={basemap as 'osm' | 'sat'}
+          origin={origin!}
+          view={view}
+          width={size.width}
+          height={size.height}
+        />
+      )}
       <Stage
         width={size.width}
         height={size.height}
@@ -495,6 +510,12 @@ export function CanvasStage() {
         scaleX={view.scale}
         scaleY={view.scale}
         draggable={tool === 'select'}
+        onDragMove={(e) => {
+          // live view sync while panning so the basemap tracks the drag
+          if (e.target === e.target.getStage()) {
+            setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }));
+          }
+        }}
         onDragEnd={(e) => {
           if (e.target === e.target.getStage()) {
             setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }));
@@ -505,7 +526,7 @@ export function CanvasStage() {
         onDblClick={onDblClick}
         onMouseMove={onMouseMove}
       >
-        <GridLayer view={view} width={size.width} height={size.height} />
+        {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
         <EdgesLayer
           edges={edgeList}
           selectedEdgeId={selectedEdgeId}
@@ -553,6 +574,17 @@ export function CanvasStage() {
       <div className="status-bar">
         <span>{cursor ? `x ${cursor.x.toFixed(1)} m · y ${cursor.y.toFixed(1)} m` : '—'}</span>
         <span>{view.scale.toFixed(1)} px/m</span>
+        <label className="basemap-pick">
+          basemap{' '}
+          <select value={basemap} onChange={(e) => setBasemap(e.target.value as typeof basemap)}>
+            <option value="none">none</option>
+            <option value="osm">OSM</option>
+            <option value="sat">Satellite</option>
+          </select>
+          {basemap !== 'none' && !origin && (
+            <span className="muted"> — search a place or import to anchor</span>
+          )}
+        </label>
         <span className="hint">{hint}</span>
       </div>
     </div>

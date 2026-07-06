@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCst, DEFAULT_IMPORT } from '../store';
 import { polylineLength } from '../geometry/polyline';
 import { validateGraph } from '../graph/validate';
@@ -22,9 +22,18 @@ export function NetworkPanel() {
   const applyDcMerge = useCst((s) => s.applyDcMerge);
   const setHighlight = useCst((s) => s.setHighlight);
 
+  const importTarget = useCst((s) => s.importTarget);
   const [lat, setLat] = useState(String(DEFAULT_IMPORT.lat));
   const [lon, setLon] = useState(String(DEFAULT_IMPORT.lon));
   const [radius, setRadius] = useState(String(DEFAULT_IMPORT.radiusM));
+
+  // Geocoding a place points the import here.
+  useEffect(() => {
+    if (importTarget) {
+      setLat(importTarget.lat.toFixed(5));
+      setLon(importTarget.lon.toFixed(5));
+    }
+  }, [importTarget]);
 
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const issues = useMemo(() => validateGraph({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }), [nodes, edges]);
