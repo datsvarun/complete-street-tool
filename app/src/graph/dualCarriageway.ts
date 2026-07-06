@@ -64,25 +64,47 @@ export function detectDualCarriageways(g: GraphState): DcCandidate[] {
   return out.sort((a, b) => a.meanSepM - b.meanSepM);
 }
 
+/**
+ * Manual pairing (user selected two parallel streets): no oneway/threshold
+ * gating — just verify they run near-parallel and measure their separation.
+ */
+export function manualDcCandidate(g: GraphState, id1: string, id2: string): DcCandidate | string {
+  const e1 = g.edges[id1];
+  const e2 = g.edges[id2];
+  if (!e1 || !e2) return 'select two streets first';
+  const d = bearingDiff(bearing(e1.points), bearing(e2.points));
+  if (Math.min(d, 180 - d) > 45) return 'streets are not parallel enough to merge';
+  const sep1 = meanSeparation(e1.points, e2.points);
+  const sep2 = meanSeparation(e2.points, e1.points);
+  if (sep1 === null || sep2 === null) return 'streets are too far apart to merge';
+  return { e1: id1, e2: id2, meanSepM: (sep1 + sep2) / 2, name: e1.name ?? e2.name };
+}
+
 /** Merge a confirmed pair into one divided-carriageway edge on a synthesized midline. */
 export function mergeDualCarriageway(g0: GraphState, c: DcCandidate): GraphState {
   const e1 = g0.edges[c.e1];
   const e2 = g0.edges[c.e2];
   if (!e1 || !e2) return g0;
 
-  // Midline: average of the two polylines after arc-length reparameterization,
-  // with e2 reversed so both run the same way.
+  // Midline: average of the two polylines after arc-length reparameterization.
+  // e2 is reversed only when the pair runs anti-parallel (typical oneway pair);
+  // manually-selected two-way pairs may run the same direction.
+  const antiParallel = bearingDiff(bearing(e1.points), bearing(e2.points)) > 90;
   const n = Math.max(8, Math.round(polylineLength(e1.points) / 5));
   const s1 = resample(e1.points, n);
-  const rev2: number[] = [];
-  for (let i = e2.points.length - 2; i >= 0; i -= 2) rev2.push(e2.points[i], e2.points[i + 1]);
-  const s2 = resample(rev2, n);
+  let p2 = e2.points;
+  if (antiParallel) {
+    const rev2: number[] = [];
+    for (let i = e2.points.length - 2; i >= 0; i -= 2) rev2.push(e2.points[i], e2.points[i + 1]);
+    p2 = rev2;
+  }
+  const s2 = resample(p2, n);
   const mid = s1.map((p, i) => ({ x: (p.x + s2[i].x) / 2, y: (p.y + s2[i].y) / 2 }));
 
-  const aKeep = e1.a; // pairs with e2.b across the median
-  const bKeep = e1.b; // pairs with e2.a
-  const aDrop = e2.b;
-  const bDrop = e2.a;
+  const aKeep = e1.a;
+  const bKeep = e1.b;
+  const aDrop = antiParallel ? e2.b : e2.a;
+  const bDrop = antiParallel ? e2.a : e2.b;
 
   let g = deleteEdge(g0, e1.id);
   g = deleteEdge(g, e2.id);

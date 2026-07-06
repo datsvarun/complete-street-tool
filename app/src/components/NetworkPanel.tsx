@@ -8,12 +8,14 @@ export function NetworkPanel() {
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
+  const selectedEdgeIds = useCst((s) => s.selectedEdgeIds);
+  const removeEdges = useCst((s) => s.removeEdges);
+  const mergeSelectedAsDc = useCst((s) => s.mergeSelectedAsDc);
   const dcCandidates = useCst((s) => s.dcCandidates);
   const statusMsg = useCst((s) => s.statusMsg);
   const importBusy = useCst((s) => s.importBusy);
   const setTool = useCst((s) => s.setTool);
   const selectEdge = useCst((s) => s.selectEdge);
-  const removeEdge = useCst((s) => s.removeEdge);
   const simplifyAll = useCst((s) => s.simplifyAll);
   const cleanNetwork = useCst((s) => s.cleanNetwork);
   const importOsm = useCst((s) => s.importOsm);
@@ -90,7 +92,16 @@ export function NetworkPanel() {
       </div>
 
       <h3>Dual carriageways</h3>
-      <button onClick={() => scanDualCarriageways()}>Find candidates</button>
+      <div className="tool-row">
+        <button onClick={() => scanDualCarriageways()}>Find candidates</button>
+        <button
+          disabled={selectedEdgeIds.length !== 2}
+          title={selectedEdgeIds.length === 2 ? 'Merge the two selected parallel streets at their midline' : 'Shift-click two parallel streets first'}
+          onClick={() => mergeSelectedAsDc()}
+        >
+          Merge selected (2)
+        </button>
+      </div>
       {dcCandidates && dcCandidates.length === 0 && <p className="muted small">None detected.</p>}
       {dcCandidates?.map((c) => (
         <div
@@ -128,7 +139,10 @@ export function NetworkPanel() {
       <ul className="edge-list">
         {edgeList.map((e) => (
           <li key={e.id}>
-            <button className={e.id === selectedEdgeId ? 'active' : ''} onClick={() => selectEdge(e.id)}>
+            <button
+              className={selectedEdgeIds.includes(e.id) ? 'active' : ''}
+              onClick={(ev) => selectEdge(e.id, ev.shiftKey)}
+            >
               <strong>{e.id}</strong> · {polylineLength(e.points).toFixed(0)} m
               <span className="muted small">
                 {' '}
@@ -140,10 +154,10 @@ export function NetworkPanel() {
           </li>
         ))}
       </ul>
-      {selected && (
-        <button className="danger" onClick={() => removeEdge(selected.id)}>
-          Delete {selected.id}
-          {selected.name ? ` (${selected.name})` : ''}
+      {selectedEdgeIds.length > 0 && (
+        <button className="danger" onClick={() => removeEdges(selectedEdgeIds)}>
+          Delete {selectedEdgeIds.length > 1 ? `${selectedEdgeIds.length} streets` : selectedEdgeIds[0]}
+          {selectedEdgeIds.length === 1 && selected?.name ? ` (${selected.name})` : ''}
         </button>
       )}
       {statusMsg && <p className="status small">{statusMsg}</p>}

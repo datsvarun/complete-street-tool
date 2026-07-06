@@ -49,14 +49,12 @@ export interface GraphNode {
  * (copy-on-write): the strip editor edits it freely without touching the
  * catalog. catalogId keeps provenance for labels/citations.
  */
-/** Where the drawn centerline sits within the section (Plan v2 §3.2.4):
- *  'center' (default), 'left' = left curb on the line, 'right' = right curb. */
-export type SectionAlign = 'center' | 'left' | 'right';
-
 export interface EdgeSection {
   catalogId: string | null; // null once customized beyond recognition (or hand-built)
   components: SectionComponent[];
-  align?: SectionAlign;
+  /** Where the drawn centerline sits, metres from the LEFT curb of the
+   *  section (Plan v2 §3.2.4 generalized). Default: half the total width. */
+  refM?: number;
 }
 
 /**

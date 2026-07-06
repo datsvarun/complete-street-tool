@@ -25,7 +25,8 @@ export function StripEditor() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const updateSectionComponents = useCst((s) => s.updateSectionComponents);
-  const updateSectionAlign = useCst((s) => s.updateSectionAlign);
+  const updateSectionRef = useCst((s) => s.updateSectionRef);
+  const flipSection = useCst((s) => s.flipSection);
   const edge = selectedEdgeId ? edges[selectedEdgeId] : null;
   const section = edge?.section ?? null;
 
@@ -94,6 +95,42 @@ export function StripEditor() {
     setSelIdx(null);
   };
 
+  // Centerline reference marker: snaps to component edges, component centers
+  // and the section midpoint (the default).
+  const refM = Math.max(0, Math.min(total, section.refM ?? total / 2));
+  const snapCandidates = (() => {
+    const c: number[] = [0, total / 2, total];
+    let cum = 0;
+    for (const comp of comps) {
+      c.push(cum + comp.widthM / 2);
+      cum += comp.widthM;
+      c.push(cum);
+    }
+    return [...new Set(c.map((v) => Math.round(v * 100) / 100))].sort((a, b) => a - b);
+  })();
+
+  const dragRef = (ev: React.PointerEvent<HTMLDivElement>) => {
+    const track = ev.currentTarget;
+    const rect = track.getBoundingClientRect();
+    const toRefM = (clientX: number) => {
+      const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const raw = frac * total;
+      let best = snapCandidates[0];
+      for (const cand of snapCandidates) {
+        if (Math.abs(cand - raw) < Math.abs(best - raw)) best = cand;
+      }
+      return best;
+    };
+    updateSectionRef(edge.id, toRefM(ev.clientX));
+    const move = (me: PointerEvent) => updateSectionRef(edge.id, toRefM(me.clientX));
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   const add = () => {
     const def = COMPONENT_DEFAULTS.find((d) => d.element === addKind)!;
     const next = comps.slice();
@@ -116,17 +153,9 @@ export function StripEditor() {
           </span>
         </span>
         <span className="strip-actions">
-          <span className="align-toggle" title="Where the drawn centerline sits within the section">
-            {(['left', 'center', 'right'] as const).map((a) => (
-              <button
-                key={a}
-                className={(section.align ?? 'center') === a ? 'active' : ''}
-                onClick={() => updateSectionAlign(edge.id, a)}
-              >
-                {a === 'left' ? '⊢' : a === 'center' ? '┼' : '⊣'}
-              </button>
-            ))}
-          </span>
+          <button onClick={() => flipSection(edge.id)} title="Mirror the section left↔right">
+            ⇋ Flip
+          </button>
           {sel && (
             <>
               <button onClick={() => nudge(-RES_CLICK)}>−0.1</button>
@@ -152,6 +181,12 @@ export function StripEditor() {
           </select>
           <button onClick={add}>Add</button>
         </span>
+      </div>
+      <div className="ref-track" onPointerDown={dragRef} title="Drag: where the drawn centerline sits (snaps to component edges, centers, and the middle)">
+        <div className="ref-marker" style={{ left: `${(refM / Math.max(total, 0.01)) * 100}%` }}>
+          <span className="ref-arrow">▲</span>
+          <span className="ref-label">{refM.toFixed(2)} m</span>
+        </div>
       </div>
       <div className="strip-row">
         {comps.map((c, i) => {

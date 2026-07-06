@@ -141,6 +141,31 @@ export function deleteEdge(g0: GraphState, edgeId: string): GraphState {
   return g;
 }
 
+/** Move an interior vertex of an edge polyline (endpoints belong to nodes). */
+export function moveEdgeVertex(g0: GraphState, edgeId: string, idx: number, x: number, y: number): GraphState {
+  const e = g0.edges[edgeId];
+  const n = e ? e.points.length / 2 : 0;
+  if (!e || idx <= 0 || idx >= n - 1) return g0;
+  const g = clone(g0);
+  const pts = e.points.slice();
+  pts[idx * 2] = x;
+  pts[idx * 2 + 1] = y;
+  g.edges[edgeId] = { ...e, points: pts };
+  return g;
+}
+
+/** Remove an interior vertex of an edge polyline. */
+export function removeEdgeVertex(g0: GraphState, edgeId: string, idx: number): GraphState {
+  const e = g0.edges[edgeId];
+  const n = e ? e.points.length / 2 : 0;
+  if (!e || idx <= 0 || idx >= n - 1) return g0;
+  const g = clone(g0);
+  const pts = e.points.slice();
+  pts.splice(idx * 2, 2);
+  g.edges[edgeId] = { ...e, points: pts };
+  return g;
+}
+
 /**
  * Remove a degree-2 node by joining its two edges into one straight-through
  * edge (the bend disappears). Returns null when the node isn't healable.

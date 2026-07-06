@@ -4,7 +4,7 @@ import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
 import { KIND_COLORS } from '../catalog';
-import { alignFactor } from '../geometry/ribbon';
+import { refFraction } from '../geometry/ribbon';
 import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
 import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts } from '../geometry/polyline';
@@ -109,14 +109,14 @@ function EdgeShape({
   const outline = useMemo(() => {
     if (showSections || !section) return null;
     const total = section.components.reduce((s, c) => s + c.widthM, 0);
-    const base = total * alignFactor(section.align);
+    const base = total * refFraction(section);
     const pts = toPts(edge.points);
     return [toFlat(offsetPolyline(pts, base)), toFlat(offsetPolyline(pts, base - total))];
   }, [edge.points, section, showSections]);
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
     if (tool === 'select') {
       e.cancelBubble = true;
-      selectEdge(edge.id);
+      selectEdge(edge.id, e.evt.shiftKey);
     } else if (tool === 'split') {
       e.cancelBubble = true;
       const stageNode = e.target.getStage()!;
@@ -179,26 +179,28 @@ function EdgeShape({
 
 function EdgesLayerImpl({
   edges,
-  selectedEdgeId,
+  selectedEdgeIds,
   highlightEdges,
   tool,
   showSections,
   trims,
+  opacity,
 }: {
   edges: StreetEdge[];
-  selectedEdgeId: string | null;
+  selectedEdgeIds: string[];
   highlightEdges: string[];
   tool: Tool;
   showSections: boolean;
   trims: Record<string, EdgeTrim>;
+  opacity: number;
 }) {
   return (
-    <Layer>
+    <Layer opacity={opacity}>
       {edges.map((e) => (
         <EdgeShape
           key={e.id}
           edge={e}
-          selected={e.id === selectedEdgeId}
+          selected={selectedEdgeIds.includes(e.id)}
           highlighted={highlightEdges.includes(e.id)}
           tool={tool}
           showSections={showSections}
@@ -309,6 +311,50 @@ function NodesLayerImpl({
 }
 const NodesLayer = memo(NodesLayerImpl);
 
+/** Interior polyline vertices (OSM way bends that aren't graph nodes):
+ *  draggable to reshape the street, right-click to remove. */
+function VerticesLayerImpl({ edges, scale }: { edges: StreetEdge[]; scale: number }) {
+  const moveVertex = useCst((s) => s.moveVertex);
+  const removeVertex = useCst((s) => s.removeVertex);
+  const r = 2.4 / scale;
+  return (
+    <Layer>
+      {edges.flatMap((e) => {
+        const n = e.points.length / 2;
+        const out = [] as React.ReactNode[];
+        for (let i = 1; i < n - 1; i++) {
+          out.push(
+            <Circle
+              key={`${e.id}-v${i}`}
+              x={e.points[i * 2]}
+              y={e.points[i * 2 + 1]}
+              radius={Math.max(r, 0.3)}
+              fill="#ffffff"
+              stroke="#5a6674"
+              strokeWidth={1}
+              strokeScaleEnabled={false}
+              draggable
+              onContextMenu={(ev) => {
+                ev.evt.preventDefault();
+                ev.cancelBubble = true;
+                removeVertex(e.id, i);
+              }}
+              onDragStart={() => useCst.temporal.getState().pause()}
+              onDragMove={(ev) => moveVertex(e.id, i, ev.target.x(), ev.target.y())}
+              onDragEnd={(ev) => {
+                useCst.temporal.getState().resume();
+                moveVertex(e.id, i, ev.target.x(), ev.target.y());
+              }}
+            />,
+          );
+        }
+        return out;
+      })}
+    </Layer>
+  );
+}
+const VerticesLayer = memo(VerticesLayerImpl);
+
 function findSnap(
   wx: number,
   wy: number,
@@ -351,7 +397,8 @@ export function CanvasStage() {
   const setBasemap = useCst((s) => s.setBasemap);
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
-  const selectedEdgeId = useCst((s) => s.selectedEdgeId);
+  const selectedEdgeIds = useCst((s) => s.selectedEdgeIds);
+  const designOpacity = useCst((s) => s.designOpacity);
   const highlightEdges = useCst((s) => s.highlightEdges);
   const draft = useCst((s) => s.draft);
   const pendingFit = useCst((s) => s.pendingFit);
@@ -548,7 +595,7 @@ export function CanvasStage() {
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
         {showSections && (
-          <Layer listening={false}>
+          <Layer listening={false} opacity={designOpacity}>
             {artifacts.junctions.flatMap((j) =>
               j.coverBands.map((b, bi) => (
                 <Line key={`${j.nodeIds[0]}-cover${bi}`} points={b} closed fill="#525e6a" listening={false} />
@@ -582,12 +629,14 @@ export function CanvasStage() {
         )}
         <EdgesLayer
           edges={edgeList}
-          selectedEdgeId={selectedEdgeId}
+          selectedEdgeIds={selectedEdgeIds}
           highlightEdges={highlightEdges}
           tool={tool}
           showSections={showSections}
           trims={artifacts.trims}
+          opacity={showSections ? designOpacity : 1}
         />
+        {stage === 'network' && <VerticesLayer edges={edgeList} scale={view.scale} />}
         {stage === 'network' && (
           <NodesLayer
             nodes={nodeList}

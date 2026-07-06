@@ -10,6 +10,8 @@ import { JunctionsPanel } from './components/JunctionsPanel';
 
 export default function App() {
   const stage = useCst((s) => s.stage);
+  const designOpacity = useCst((s) => s.designOpacity);
+  const setDesignOpacity = useCst((s) => s.setDesignOpacity);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -29,8 +31,8 @@ export default function App() {
         else s.selectEdge(null);
       } else if (e.key === 'Enter' && s.draft.length >= 2) {
         s.finishDraft(0.5);
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && s.selectedEdgeId) {
-        s.removeEdge(s.selectedEdgeId);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && s.selectedEdgeIds.length > 0) {
+        s.removeEdges(s.selectedEdgeIds);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -46,6 +48,16 @@ export default function App() {
         <StageTabs />
         <GeocodeSearch />
         <div className="header-actions">
+          <label className="opacity-slider" title="Design layer transparency (see the basemap through the plan)">
+            <span className="muted small">design</span>
+            <input
+              type="range"
+              min="15"
+              max="100"
+              value={Math.round(designOpacity * 100)}
+              onChange={(e) => setDesignOpacity(parseInt(e.target.value, 10) / 100)}
+            />
+          </label>
           <button onClick={() => useCst.temporal.getState().undo()} title="Undo (Ctrl+Z)">
             ↩
           </button>

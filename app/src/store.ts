@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
-import type { DcCandidate, DraftVert, GraphState, ReviewItem, SectionAlign, SectionComponent, Stage, Tool } from './types';
+import type { DcCandidate, DraftVert, GraphState, ReviewItem, SectionComponent, Stage, Tool } from './types';
 import {
   commitDraft,
   deleteEdge,
@@ -8,12 +8,14 @@ import {
   EMPTY_GRAPH,
   joinThroughNode,
   mergeNodes,
+  moveEdgeVertex,
   moveNode,
+  removeEdgeVertex,
   simplifyEdges,
   splitEdge,
 } from './graph/ops';
 import { runStandardPipeline } from './graph/transforms';
-import { detectDualCarriageways, mergeDualCarriageway } from './graph/dualCarriageway';
+import { detectDualCarriageways, manualDcCandidate, mergeDualCarriageway } from './graph/dualCarriageway';
 import { fetchOverpass, parseOsm, toLocal, DEFAULT_IMPORT } from './osm/overpass';
 import type { LatLon } from './osm/overpass';
 import { getSection } from './catalog';
@@ -34,7 +36,9 @@ interface CstState extends GraphState {
   basemap: Basemap;
   /** Last geocoded place — NetworkPanel syncs its import fields to this. */
   importTarget: LatLon | null;
-  selectedEdgeId: string | null;
+  selectedEdgeId: string | null;      // primary selection (last clicked)
+  selectedEdgeIds: string[];          // full multi-selection (shift-click)
+  designOpacity: number;              // 0.2–1, sections/junctions layer alpha
   draft: DraftVert[];
   dcCandidates: DcCandidate[] | null; // null = not scanned yet
   highlightEdges: string[];
@@ -48,12 +52,18 @@ interface CstState extends GraphState {
   addDraftVert: (v: DraftVert) => void;
   finishDraft: (tolWorld: number) => void;
   cancelDraft: () => void;
-  selectEdge: (id: string | null) => void;
+  selectEdge: (id: string | null, additive?: boolean) => void;
+  removeEdges: (ids: string[]) => void;
+  setDesignOpacity: (v: number) => void;
+  moveVertex: (edgeId: string, idx: number, x: number, y: number) => void;
+  removeVertex: (edgeId: string, idx: number) => void;
+  flipSection: (edgeId: string) => void;
+  mergeSelectedAsDc: () => void;
   removeEdge: (id: string) => void;
   removeNode: (id: string) => void;
   assignSection: (edgeId: string, catalogId: string | null) => void;
   updateSectionComponents: (edgeId: string, components: SectionComponent[]) => void;
-  updateSectionAlign: (edgeId: string, align: SectionAlign) => void;
+  updateSectionRef: (edgeId: string, refM: number) => void;
   removeNodeSmart: (nodeId: string) => void;
   autoAssign: () => void;
   dismissReview: (edgeId: string) => void;
@@ -98,6 +108,8 @@ export const useCst = create<CstState>()(
       basemap: 'osm',
       importTarget: null,
       selectedEdgeId: null,
+      selectedEdgeIds: [],
+      designOpacity: 1,
       draft: [],
       dcCandidates: null,
       highlightEdges: [],
@@ -132,7 +144,63 @@ export const useCst = create<CstState>()(
       },
 
       cancelDraft: () => set({ draft: [] }),
-      selectEdge: (id) => set({ selectedEdgeId: id }),
+      selectEdge: (id, additive) =>
+        set((s) => {
+          if (!additive || !id) {
+            return { selectedEdgeId: id, selectedEdgeIds: id ? [id] : [] };
+          }
+          const has = s.selectedEdgeIds.includes(id);
+          const ids = has ? s.selectedEdgeIds.filter((x) => x !== id) : [...s.selectedEdgeIds, id];
+          return { selectedEdgeIds: ids, selectedEdgeId: has ? (ids[ids.length - 1] ?? null) : id };
+        }),
+
+      removeEdges: (ids) =>
+        set((s) => {
+          let g = pickGraph(s);
+          for (const id of ids) g = deleteEdge(g, id);
+          return {
+            ...g,
+            dcCandidates: null,
+            highlightEdges: [],
+            selectedEdgeId: null,
+            selectedEdgeIds: [],
+            statusMsg: `${ids.length} street(s) deleted`,
+          };
+        }),
+
+      setDesignOpacity: (v) => set({ designOpacity: Math.max(0.15, Math.min(1, v)) }),
+
+      moveVertex: (edgeId, idx, x, y) => set((s) => ({ ...moveEdgeVertex(pickGraph(s), edgeId, idx, x, y) })),
+
+      removeVertex: (edgeId, idx) =>
+        set((s) => ({ ...removeEdgeVertex(pickGraph(s), edgeId, idx), statusMsg: 'vertex removed' })),
+
+      flipSection: (edgeId) =>
+        set((s) => {
+          const e = s.edges[edgeId];
+          if (!e?.section) return {};
+          const total = e.section.components.reduce((sum, c) => sum + c.widthM, 0);
+          const section = {
+            ...e.section,
+            components: [...e.section.components].reverse(),
+            refM: total - (e.section.refM ?? total / 2),
+          };
+          return { edges: { ...s.edges, [edgeId]: { ...e, section } }, statusMsg: 'section flipped' };
+        }),
+
+      mergeSelectedAsDc: () =>
+        set((s) => {
+          if (s.selectedEdgeIds.length !== 2) return { statusMsg: 'select exactly 2 parallel streets first' };
+          const cand = manualDcCandidate(pickGraph(s), s.selectedEdgeIds[0], s.selectedEdgeIds[1]);
+          if (typeof cand === 'string') return { statusMsg: cand };
+          return {
+            ...mergeDualCarriageway(pickGraph(s), cand),
+            selectedEdgeId: null,
+            selectedEdgeIds: [],
+            dcCandidates: null,
+            statusMsg: `Merged into a divided carriageway (separation ${cand.meanSepM.toFixed(1)} m)`,
+          };
+        }),
 
       removeEdge: (id) =>
         set((s) => ({
@@ -140,6 +208,7 @@ export const useCst = create<CstState>()(
           dcCandidates: null,
           highlightEdges: [],
           selectedEdgeId: s.selectedEdgeId === id ? null : s.selectedEdgeId,
+          selectedEdgeIds: s.selectedEdgeIds.filter((x) => x !== id),
         })),
 
       removeNode: (id) => set((s) => ({ ...deleteNode(pickGraph(s), id), dcCandidates: null })),
@@ -187,12 +256,14 @@ export const useCst = create<CstState>()(
       dismissReview: (edgeId) =>
         set((s) => ({ reviewList: s.reviewList.filter((r) => r.edgeId !== edgeId) })),
 
-      updateSectionAlign: (edgeId, align) =>
+      updateSectionRef: (edgeId, refM) =>
         set((s) => {
           const e = s.edges[edgeId];
           if (!e?.section) return {};
+          const total = e.section.components.reduce((sum, c) => sum + c.widthM, 0);
+          const clamped = Math.max(0, Math.min(total, refM));
           return {
-            edges: { ...s.edges, [edgeId]: { ...e, section: { ...e.section, align } } },
+            edges: { ...s.edges, [edgeId]: { ...e, section: { ...e.section, refM: clamped } } },
           };
         }),
 

@@ -21,7 +21,7 @@ import {
   ribbonBand,
 } from '../geometry/polyline';
 import type { RibbonBand } from '../geometry/ribbon';
-import { alignFactor } from '../geometry/ribbon';
+import { refFraction } from '../geometry/ribbon';
 import {
   matchComponents,
   sampleTransitionBands,
@@ -296,8 +296,8 @@ function transitionForNode(
   if (path.length < 4) return null;
 
   // Alignment factors follow travel orientation (reversal mirrors left/right).
-  let fIn = alignFactor(eIn.section.align);
-  let fOut = alignFactor(eOut.section.align);
+  let fIn = refFraction(eIn.section);
+  let fOut = refFraction(eOut.section);
   if (inReversed) fIn = 1 - fIn;
   if (outReversed) fOut = 1 - fOut;
 

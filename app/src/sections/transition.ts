@@ -6,7 +6,7 @@
 import type { ComponentKind, EdgeSection, SectionComponent, StreetEdge } from '../types';
 import { pointAtStation, polylineLength, subPolyline } from '../geometry/polyline';
 import type { RibbonBand, RibbonMarking } from '../geometry/ribbon';
-import { alignFactor, buildRibbon } from '../geometry/ribbon';
+import { buildRibbon, refFraction } from '../geometry/ribbon';
 
 /** Taper ratios (length per metre of width change), Plan v2 §3.2.2. */
 const TAPER_RATIO: Partial<Record<ComponentKind, number>> = {
@@ -208,12 +208,12 @@ export function buildEdgeGeometry(
         ? edge.points
         : subPolyline(edge.points, span.from, span.to);
       if (sub.length < 4) return;
-      const r = buildRibbon(sub, span.sec!.components, span.sec!.align);
+      const r = buildRibbon(sub, span.sec!.components, refFraction(span.sec!));
       r.bands.forEach((b) => bands.push({ ...b, key: `s${si}-${b.key}` }));
       r.markings.forEach((m) => markings.push({ ...m, key: `s${si}-${m.key}` }));
       return;
     }
-    const f = alignFactor(edge.section?.align);
+    const f = edge.section ? refFraction(edge.section) : 0.5;
     bands.push(...sampleTransitionBands(edge.points, span.matched!, span.from, span.to, `s${si}`, f, f));
   });
 
