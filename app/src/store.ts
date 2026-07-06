@@ -1,11 +1,12 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
-import type { DcCandidate, DraftVert, GraphState, ReviewItem, SectionComponent, Stage, Tool } from './types';
+import type { DcCandidate, DraftVert, GraphState, ReviewItem, SectionAlign, SectionComponent, Stage, Tool } from './types';
 import {
   commitDraft,
   deleteEdge,
   deleteNode,
   EMPTY_GRAPH,
+  joinThroughNode,
   mergeNodes,
   moveNode,
   simplifyEdges,
@@ -52,6 +53,8 @@ interface CstState extends GraphState {
   removeNode: (id: string) => void;
   assignSection: (edgeId: string, catalogId: string | null) => void;
   updateSectionComponents: (edgeId: string, components: SectionComponent[]) => void;
+  updateSectionAlign: (edgeId: string, align: SectionAlign) => void;
+  removeNodeSmart: (nodeId: string) => void;
   autoAssign: () => void;
   dismissReview: (edgeId: string) => void;
   focusNode: (nodeId: string) => void;
@@ -183,6 +186,36 @@ export const useCst = create<CstState>()(
 
       dismissReview: (edgeId) =>
         set((s) => ({ reviewList: s.reviewList.filter((r) => r.edgeId !== edgeId) })),
+
+      updateSectionAlign: (edgeId, align) =>
+        set((s) => {
+          const e = s.edges[edgeId];
+          if (!e?.section) return {};
+          return {
+            edges: { ...s.edges, [edgeId]: { ...e, section: { ...e.section, align } } },
+          };
+        }),
+
+      // Right-click delete: terminus/junction nodes go with their edges;
+      // a degree-2 node heals — its two streets join without the bend.
+      removeNodeSmart: (nodeId) =>
+        set((s) => {
+          const g = pickGraph(s);
+          const deg = Object.values(s.edges).reduce(
+            (d, e) => d + (e.a === nodeId ? 1 : 0) + (e.b === nodeId ? 1 : 0),
+            0,
+          );
+          if (deg === 2) {
+            const healed = joinThroughNode(g, nodeId);
+            if (healed) return { ...healed, dcCandidates: null, statusMsg: `${nodeId} removed — streets joined` };
+          }
+          return {
+            ...deleteNode(g, nodeId),
+            dcCandidates: null,
+            selectedEdgeId: null,
+            statusMsg: deg >= 3 ? `${nodeId} and its ${deg} streets removed — redraw as needed` : `${nodeId} removed`,
+          };
+        }),
 
       moveNodeTo: (id, x, y) => set((s) => ({ ...moveNode(pickGraph(s), id, x, y) })),
 
@@ -322,3 +355,8 @@ export const useCst = create<CstState>()(
 );
 
 export { DEFAULT_IMPORT };
+
+// Dev-only handle for Playwright drives and console debugging.
+if (import.meta.env.DEV) {
+  (window as unknown as Record<string, unknown>).__cst = useCst;
+}

@@ -4,9 +4,10 @@ import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
 import { KIND_COLORS } from '../catalog';
+import { alignFactor } from '../geometry/ribbon';
 import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
-import { projectOnPolyline, dist } from '../geometry/polyline';
+import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts } from '../geometry/polyline';
 import { nodeClassOf } from '../types';
 import type { GraphNode, Snap, StreetEdge, Tool } from '../types';
 import { degree } from '../graph/ops';
@@ -103,6 +104,15 @@ function EdgeShape({
     () => (showSections ? buildEdgeGeometry(edge, trim) : { bands: [], markings: [] }),
     [edge, showSections, trim],
   );
+  // Network view: dotted ROW outlines so the section stays referenceable
+  // while editing the graph.
+  const outline = useMemo(() => {
+    if (showSections || !section) return null;
+    const total = section.components.reduce((s, c) => s + c.widthM, 0);
+    const base = total * alignFactor(section.align);
+    const pts = toPts(edge.points);
+    return [toFlat(offsetPolyline(pts, base)), toFlat(offsetPolyline(pts, base - total))];
+  }, [edge.points, section, showSections]);
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
     if (tool === 'select') {
       e.cancelBubble = true;
@@ -130,6 +140,17 @@ function EdgeShape({
           strokeWidth={0.6}
           strokeScaleEnabled={false}
           onClick={onClick}
+        />
+      ))}
+      {outline?.map((o, i) => (
+        <Line
+          key={`${edge.id}-out${i}`}
+          points={o}
+          stroke="rgba(70,84,98,0.55)"
+          strokeWidth={1}
+          dash={[3, 4]}
+          strokeScaleEnabled={false}
+          listening={false}
         />
       ))}
       {markings.map((m) => (
@@ -203,7 +224,24 @@ function NodesLayerImpl({
   const moveNodeTo = useCst((s) => s.moveNodeTo);
   const mergeNodePair = useCst((s) => s.mergeNodePair);
   const weldNodeToEdge = useCst((s) => s.weldNodeToEdge);
+  const removeNodeSmart = useCst((s) => s.removeNodeSmart);
+  const [dragSnap, setDragSnap] = useState<{ x: number; y: number; kind: 'node' | 'edge' } | null>(null);
   const r = 3.5 / scale;
+
+  const snapUnderDrag = (nodeId: string, x: number, y: number) => {
+    const tol = NODE_MERGE_PX / scale;
+    const state = useCst.getState();
+    for (const m of Object.values(state.nodes)) {
+      if (m.id !== nodeId && dist(m.x, m.y, x, y) < tol) return { x: m.x, y: m.y, kind: 'node' as const };
+    }
+    for (const e of Object.values(state.edges)) {
+      if (e.a === nodeId || e.b === nodeId) continue;
+      const proj = projectOnPolyline(e.points, x, y);
+      if (proj && proj.dist < tol) return { x: proj.x, y: proj.y, kind: 'edge' as const };
+    }
+    return null;
+  };
+
   return (
     <Layer>
       {nodes.map((n) => (
@@ -217,9 +255,18 @@ function NodesLayerImpl({
           strokeWidth={1}
           strokeScaleEnabled={false}
           draggable={draggable}
+          onContextMenu={(e) => {
+            e.evt.preventDefault();
+            e.cancelBubble = true;
+            removeNodeSmart(n.id);
+          }}
           onDragStart={() => useCst.temporal.getState().pause()}
-          onDragMove={(e) => moveNodeTo(n.id, e.target.x(), e.target.y())}
+          onDragMove={(e) => {
+            moveNodeTo(n.id, e.target.x(), e.target.y());
+            setDragSnap(snapUnderDrag(n.id, e.target.x(), e.target.y()));
+          }}
           onDragEnd={(e) => {
+            setDragSnap(null);
             useCst.temporal.getState().resume();
             const x = e.target.x();
             const y = e.target.y();
@@ -247,6 +294,16 @@ function NodesLayerImpl({
           }}
         />
       ))}
+      {dragSnap && (
+        <Ring
+          x={dragSnap.x}
+          y={dragSnap.y}
+          innerRadius={4.5 / scale}
+          outerRadius={7 / scale}
+          fill={dragSnap.kind === 'node' ? '#0a8f4b' : '#b3541e'}
+          listening={false}
+        />
+      )}
     </Layer>
   );
 }
@@ -394,7 +451,10 @@ export function CanvasStage() {
       const w = toWorld(stageNode);
       if (!w) return;
       const c = constrain(w, e.evt.shiftKey);
-      const s = snap ?? findSnap(c.x, c.y, SNAP_PX / view.scale, nodes, edges);
+      // Compute the snap HERE, not from state: the mousemove preceding a fast
+      // click may not have re-rendered yet, and a stale snap would duplicate
+      // the previous vertex (which the stationary-dblclick check then eats).
+      const s = findSnap(c.x, c.y, SNAP_PX / view.scale, nodes, edges);
       addDraftVert(s ? { x: s.x, y: s.y, snap: s } : { x: c.x, y: c.y, snap: null });
     } else if (tool === 'select' && e.target === stageNode) {
       useCst.getState().selectEdge(null);
@@ -451,6 +511,7 @@ export function CanvasStage() {
       ref={containerRef}
       className={basemapActive ? 'canvas-host with-basemap' : 'canvas-host'}
       style={{ cursor: tool === 'draw' ? 'crosshair' : tool === 'split' ? 'cell' : 'grab' }}
+      onContextMenu={(e) => e.preventDefault()}
     >
       {basemapActive && (
         <Basemap
@@ -488,9 +549,14 @@ export function CanvasStage() {
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
         {showSections && (
           <Layer listening={false}>
+            {artifacts.junctions.flatMap((j) =>
+              j.coverBands.map((b, bi) => (
+                <Line key={`${j.nodeIds[0]}-cover${bi}`} points={b} closed fill="#525e6a" listening={false} />
+              )),
+            )}
             {artifacts.junctions.map((j) => (
               <Line
-                key={j.nodeId}
+                key={j.nodeIds.join('+')}
                 points={j.polygon}
                 closed
                 fill="#525e6a"

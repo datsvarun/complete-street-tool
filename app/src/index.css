@@ -476,6 +476,17 @@ aside {
   font-size: 12px;
 }
 
+.align-toggle {
+  display: inline-flex;
+  gap: 2px;
+  margin-right: 6px;
+}
+
+.align-toggle button.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
 .strip-actions button.danger {
   border-color: var(--danger-border);
   color: var(--danger-text);

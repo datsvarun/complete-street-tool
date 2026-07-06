@@ -6,7 +6,7 @@
 import type { ComponentKind, EdgeSection, SectionComponent, StreetEdge } from '../types';
 import { pointAtStation, polylineLength, subPolyline } from '../geometry/polyline';
 import type { RibbonBand, RibbonMarking } from '../geometry/ribbon';
-import { buildRibbon } from '../geometry/ribbon';
+import { alignFactor, buildRibbon } from '../geometry/ribbon';
 
 /** Taper ratios (length per metre of width change), Plan v2 §3.2.2. */
 const TAPER_RATIO: Partial<Record<ComponentKind, number>> = {
@@ -138,6 +138,8 @@ export function sampleTransitionBands(
   from: number,
   to: number,
   keyPrefix: string,
+  alignF1 = 0.5,
+  alignF2 = 0.5,
 ): RibbonBand[] {
   const zoneLen = to - from;
   if (zoneLen < 0.05) return [];
@@ -148,13 +150,13 @@ export function sampleTransitionBands(
   const samplePts = stations.map((s) => pointAtStation(path, s));
   const blend = stations.map((s) => smoothstep((s - from) / zoneLen));
 
-  // Per-sample cumulative offsets, centered on the total width at that sample
-  // (align 'center': the carriageway centerline holds position).
+  // Per-sample cumulative offsets; the alignment factor (share of width left
+  // of the centerline) blends between the two sections' alignments.
   const widths = (ci: number, k: number) =>
     matched[ci].w1 + (matched[ci].w2 - matched[ci].w1) * blend[k];
   const totals = stations.map((_, k) => matched.reduce((sum, _c, ci) => sum + widths(ci, k), 0));
 
-  let upper = stations.map((_, k) => totals[k] / 2);
+  let upper = stations.map((_, k) => totals[k] * (alignF1 + (alignF2 - alignF1) * blend[k]));
   matched.forEach((c, ci) => {
     const lower = upper.map((u, k) => u - widths(ci, k));
     if (Math.max(...upper.map((u, k) => u - lower[k])) > 0.02) {
@@ -206,12 +208,13 @@ export function buildEdgeGeometry(
         ? edge.points
         : subPolyline(edge.points, span.from, span.to);
       if (sub.length < 4) return;
-      const r = buildRibbon(sub, span.sec!.components);
+      const r = buildRibbon(sub, span.sec!.components, span.sec!.align);
       r.bands.forEach((b) => bands.push({ ...b, key: `s${si}-${b.key}` }));
       r.markings.forEach((m) => markings.push({ ...m, key: `s${si}-${m.key}` }));
       return;
     }
-    bands.push(...sampleTransitionBands(edge.points, span.matched!, span.from, span.to, `s${si}`));
+    const f = alignFactor(edge.section?.align);
+    bands.push(...sampleTransitionBands(edge.points, span.matched!, span.from, span.to, `s${si}`, f, f));
   });
 
   return { bands, markings };

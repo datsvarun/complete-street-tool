@@ -147,6 +147,18 @@ Principles that must hold as it grows:
 
 ---
 
+## 6a. Detailing scope (Stage 3)
+
+Beyond the furniture set in Plan v2 §5, detailing covers the full drawn language of a street design plan. Rule-placed (with citations) or hand-placed, all parametrically anchored:
+
+- **Markings:** lane lines (partly derived already), turn/directional arrows per movement (needs the Phase 2.5 movement graph), stop lines, yield markings, box junctions, edge lines
+- **Crossings:** zebra/raised pedestrian crossings, cycle crossings, refuge islands
+- **Control:** signs (parametric point symbols with type), signal heads per approach
+- **Access & protection:** property entrances (curb cuts across the footpath band — interrupts footpath continuity, ties into §1.2 dirty flags), bollards, guardrails
+- **Furniture:** bus stops, trees, lights, bins, benches (as per Plan v2 §5.1 rule set)
+
+Each kind is data (symbol + params + anchor), not code — the rules engine places them, the export legend cites them.
+
 ## 7. Export (Stage 4) — the deliverable defines the app
 
 The user's output is a **plan someone can act on**: print it, open it in CAD, overlay it in GIS.

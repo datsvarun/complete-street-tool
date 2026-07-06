@@ -141,6 +141,45 @@ export function deleteEdge(g0: GraphState, edgeId: string): GraphState {
   return g;
 }
 
+/**
+ * Remove a degree-2 node by joining its two edges into one straight-through
+ * edge (the bend disappears). Returns null when the node isn't healable.
+ */
+export function joinThroughNode(g0: GraphState, nodeId: string): GraphState | null {
+  const around = edgesAt(g0, nodeId);
+  if (around.length !== 2 || around[0].id === around[1].id) return null;
+  const [e1, e2] = around;
+  const otherEnd = (e: StreetEdge) => (e.a === nodeId ? e.b : e.a);
+  if (otherEnd(e1) === otherEnd(e2) && otherEnd(e1) === nodeId) return null;
+
+  // e1 oriented to END at the node, e2 to START at it.
+  const p1 = e1.b === nodeId ? e1.points : reverseFlat(e1.points);
+  const p2 = e2.a === nodeId ? e2.points : reverseFlat(e2.points);
+  const e1Reversed = e1.b !== nodeId;
+  const e2Reversed = e2.a !== nodeId;
+  const joined: StreetEdge = {
+    ...e1,
+    a: otherEnd(e1),
+    b: otherEnd(e2),
+    points: [...p1, ...p2.slice(2)],
+    // Direction semantics survive only if neither edge had to flip.
+    oneway: !!e1.oneway && !!e2.oneway && !e1Reversed && !e2Reversed,
+    overrides: undefined, // station anchors don't survive the splice
+  };
+  if (joined.a === joined.b) return null; // would collapse to a loop
+  const g = clone(g0);
+  delete g.edges[e2.id];
+  g.edges[e1.id] = joined;
+  delete g.nodes[nodeId];
+  return g;
+}
+
+function reverseFlat(flat: number[]): number[] {
+  const out: number[] = [];
+  for (let i = flat.length - 2; i >= 0; i -= 2) out.push(flat[i], flat[i + 1]);
+  return out;
+}
+
 /** Delete a node and every edge touching it (orphan cleanup included). */
 export function deleteNode(g0: GraphState, nodeId: string): GraphState {
   let g = clone(g0);

@@ -32,15 +32,16 @@ export function JunctionsPanel() {
       <h3>Junctions ({junctions.length})</h3>
       <ul className="edge-list tall">
         {junctions.map((j) => (
-          <li key={j.nodeId}>
+          <li key={j.nodeIds.join('+')}>
             <button
-              className={j.nodeId === activeId ? 'active' : ''}
+              className={j.nodeIds[0] === activeId ? 'active' : ''}
               onClick={() => {
-                setActiveId(j.nodeId);
-                focusNode(j.nodeId);
+                setActiveId(j.nodeIds[0]);
+                focusNode(j.nodeIds[0]);
               }}
             >
-              <strong>{j.nodeId}</strong> · {j.degree}-way
+              <strong>{j.nodeIds.length > 1 ? `${j.nodeIds[0]}+${j.nodeIds.length - 1}` : j.nodeIds[0]}</strong>
+              {' '}· {j.degree}-way{j.nodeIds.length > 1 ? ' complex' : ''}
               <span className="muted small"> {j.names.slice(0, 2).join(' × ') || ''}</span>
             </button>
           </li>

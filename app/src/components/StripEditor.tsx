@@ -25,6 +25,7 @@ export function StripEditor() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const updateSectionComponents = useCst((s) => s.updateSectionComponents);
+  const updateSectionAlign = useCst((s) => s.updateSectionAlign);
   const edge = selectedEdgeId ? edges[selectedEdgeId] : null;
   const section = edge?.section ?? null;
 
@@ -115,6 +116,17 @@ export function StripEditor() {
           </span>
         </span>
         <span className="strip-actions">
+          <span className="align-toggle" title="Where the drawn centerline sits within the section">
+            {(['left', 'center', 'right'] as const).map((a) => (
+              <button
+                key={a}
+                className={(section.align ?? 'center') === a ? 'active' : ''}
+                onClick={() => updateSectionAlign(edge.id, a)}
+              >
+                {a === 'left' ? '⊢' : a === 'center' ? '┼' : '⊣'}
+              </button>
+            ))}
+          </span>
           {sel && (
             <>
               <button onClick={() => nudge(-RES_CLICK)}>−0.1</button>
