@@ -81,9 +81,20 @@ export function splitEdge(
   const ptsB = [proj.x, proj.y, ...e.points.slice(i + 2)];
   const base = { section: e.section, highway: e.highway, name: e.name, oneway: e.oneway,
     carriagewayType: e.carriagewayType, medianWidth: e.medianWidth };
+  // Station-anchored overrides re-anchor into whichever half they fall in.
+  const clipOverrides = (s0: number, s1: number) =>
+    (e.overrides ?? [])
+      .map((o) => ({
+        ...o,
+        fromM: Math.max(o.fromM, s0) - s0,
+        toM: Math.min(o.toM, s1) - s0,
+      }))
+      .filter((o) => o.toM - o.fromM > 3);
+  const ovA = clipOverrides(0, proj.station);
+  const ovB = clipOverrides(proj.station, total);
   delete g.edges[edgeId];
-  addEdge(g, { ...base, a: e.a, b: nodeId, points: ptsA });
-  addEdge(g, { ...base, a: nodeId, b: e.b, points: ptsB });
+  addEdge(g, { ...base, a: e.a, b: nodeId, points: ptsA, overrides: ovA.length ? ovA : undefined });
+  addEdge(g, { ...base, a: nodeId, b: e.b, points: ptsB, overrides: ovB.length ? ovB : undefined });
   return { g, nodeId };
 }
 

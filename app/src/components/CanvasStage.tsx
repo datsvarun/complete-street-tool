@@ -1,11 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Line, Circle, Ring } from 'react-konva';
+import { Stage, Layer, Line, Circle, Group, Ring } from 'react-konva';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
 import { KIND_COLORS } from '../catalog';
-import { buildRibbon } from '../geometry/ribbon';
-import { projectOnPolyline, dist } from '../geometry/polyline';
+import { buildEdgeGeometry } from '../sections/transition';
+import { pointAtStation, projectOnPolyline, dist, subPolyline } from '../geometry/polyline';
 import { nodeClassOf } from '../types';
 import type { GraphNode, Snap, StreetEdge, Tool } from '../types';
 import { degree } from '../graph/ops';
@@ -92,13 +92,7 @@ function EdgeShape({
   const selectEdge = useCst((s) => s.selectEdge);
   const splitEdgeAt = useCst((s) => s.splitEdgeAt);
   const section = edge.section;
-  const { bands, markings } = useMemo(
-    () =>
-      section
-        ? buildRibbon(edge.points, section.components)
-        : { bands: [], markings: [] },
-    [edge.points, section],
-  );
+  const { bands, markings } = useMemo(() => buildEdgeGeometry(edge), [edge]);
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
     if (tool === 'select') {
       e.cancelBubble = true;
@@ -226,6 +220,89 @@ function NodesLayerImpl({
   );
 }
 const NodesLayer = memo(NodesLayerImpl);
+
+/** Draggable start/end handles for the selected edge's section overrides
+ *  (Plan v2 §3.2 done-when: dragging live-updates the tapers). */
+function OverrideHandles({ edge, scale }: { edge: StreetEdge; scale: number }) {
+  const selectedOverrideId = useCst((s) => s.selectedOverrideId);
+  const selectOverride = useCst((s) => s.selectOverride);
+  const updateOverrideRange = useCst((s) => s.updateOverrideRange);
+  const overrides = edge.overrides ?? [];
+  if (overrides.length === 0) return null;
+
+  const stationOfPointer = (px: number, py: number) => {
+    const proj = projectOnPolyline(edge.points, px, py);
+    return proj ? proj.station : null;
+  };
+
+  return (
+    <Layer>
+      {overrides.map((o) => {
+        const zone = subPolyline(edge.points, o.fromM, o.toM);
+        const active = o.id === selectedOverrideId;
+        const ends: Array<['fromM' | 'toM', number]> = [['fromM', o.fromM], ['toM', o.toM]];
+        return (
+          <Group key={o.id}>
+            <Line
+              points={zone}
+              stroke={active ? '#c9581f' : 'rgba(201,88,31,0.45)'}
+              strokeWidth={active ? 4 : 3}
+              dash={[2, 6]}
+              strokeScaleEnabled={false}
+              hitStrokeWidth={12}
+              onClick={(e) => {
+                e.cancelBubble = true;
+                selectOverride(o.id);
+              }}
+            />
+            {ends.map(([field, st]) => {
+              const p = pointAtStation(edge.points, st);
+              return (
+                <Circle
+                  key={field}
+                  x={p.x}
+                  y={p.y}
+                  radius={6 / scale}
+                  fill="#fff"
+                  stroke="#c9581f"
+                  strokeWidth={2.5}
+                  strokeScaleEnabled={false}
+                  draggable
+                  onDragStart={(e) => {
+                    e.cancelBubble = true;
+                    selectOverride(o.id);
+                    useCst.temporal.getState().pause();
+                  }}
+                  onDragMove={(e) => {
+                    const st2 = stationOfPointer(e.target.x(), e.target.y());
+                    if (st2 === null) return;
+                    updateOverrideRange(
+                      edge.id,
+                      o.id,
+                      field === 'fromM' ? st2 : o.fromM,
+                      field === 'toM' ? st2 : o.toM,
+                    );
+                    // keep the handle glued to the centerline
+                    const cur = useCst.getState().edges[edge.id]?.overrides?.find((x) => x.id === o.id);
+                    if (cur) {
+                      const p2 = pointAtStation(edge.points, cur[field]);
+                      e.target.position({ x: p2.x, y: p2.y });
+                    }
+                  }}
+                  onDragEnd={() => {
+                    useCst.temporal.getState().resume();
+                    const cur = useCst.getState().edges[edge.id]?.overrides?.find((x) => x.id === o.id);
+                    if (cur) updateOverrideRange(edge.id, o.id, cur.fromM, cur.toM);
+                  }}
+                />
+              );
+            })}
+          </Group>
+        );
+      })}
+    </Layer>
+  );
+}
 
 function findSnap(
   wx: number,
@@ -442,6 +519,9 @@ export function CanvasStage() {
             scale={view.scale}
             draggable={tool === 'select'}
           />
+        )}
+        {stage === 'sections' && selectedEdgeId && edges[selectedEdgeId] && (
+          <OverrideHandles edge={edges[selectedEdgeId]} scale={view.scale} />
         )}
         <Layer listening={false}>
           {draftFlat.length >= 4 && (

@@ -159,6 +159,51 @@ export function resample(flat: number[], n: number): Pt[] {
   return out;
 }
 
+export interface StationPoint {
+  x: number;
+  y: number;
+  nx: number; // unit left-normal at this station
+  ny: number;
+}
+
+/** Point + left normal at arc-length station s (clamped to the polyline). */
+export function pointAtStation(flat: number[], s: number): StationPoint {
+  const pts = toPts(flat);
+  let acc = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    if (acc + segLen >= s || i === pts.length - 2) {
+      const t = segLen < 1e-9 ? 0 : Math.max(0, Math.min(1, (s - acc) / segLen));
+      const n = leftNormal(a, b);
+      return { x: a.x + t * (b.x - a.x), y: a.y + t * (b.y - a.y), nx: n.x, ny: n.y };
+    }
+    acc += segLen;
+  }
+  const n = pts.length >= 2 ? leftNormal(pts[0], pts[1]) : { x: 0, y: -1 };
+  return { x: pts[0]?.x ?? 0, y: pts[0]?.y ?? 0, nx: n.x, ny: n.y };
+}
+
+/** Extract the sub-polyline between stations s0 < s1 (both clamped). */
+export function subPolyline(flat: number[], s0: number, s1: number): number[] {
+  const pts = toPts(flat);
+  const out: Pt[] = [];
+  const p0 = pointAtStation(flat, s0);
+  out.push({ x: p0.x, y: p0.y });
+  let acc = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const segLen = Math.hypot(b.x - a.x, b.y - a.y);
+    const end = acc + segLen;
+    if (end > s0 && end < s1) out.push(b);
+    acc = end;
+    if (acc >= s1) break;
+  }
+  const p1 = pointAtStation(flat, s1);
+  out.push({ x: p1.x, y: p1.y });
+  return toFlat(dedupe(out, 0.01));
+}
+
 /** Unit left-normal of segment a→b (y-down coords: left of travel direction). */
 function leftNormal(a: Pt, b: Pt): Pt {
   const dx = b.x - a.x;

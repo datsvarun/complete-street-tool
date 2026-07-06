@@ -24,9 +24,12 @@ function belowMin(c: SectionComponent): { minM: number; source: string } | null 
 export function StripEditor() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
+  const selectedOverrideId = useCst((s) => s.selectedOverrideId);
   const updateSectionComponents = useCst((s) => s.updateSectionComponents);
   const edge = selectedEdgeId ? edges[selectedEdgeId] : null;
-  const section = edge?.section ?? null;
+  const override =
+    (selectedOverrideId && edge?.overrides?.find((o) => o.id === selectedOverrideId)) || null;
+  const section = override?.section ?? edge?.section ?? null;
 
   const [selIdx, setSelIdx] = useState<number | null>(null);
   const [widthText, setWidthText] = useState('');
@@ -34,7 +37,7 @@ export function StripEditor() {
 
   useEffect(() => {
     setSelIdx(null);
-  }, [selectedEdgeId]);
+  }, [selectedEdgeId, selectedOverrideId]);
 
   useEffect(() => {
     if (section && selIdx !== null && section.components[selIdx]) {
@@ -107,6 +110,11 @@ export function StripEditor() {
       <div className="strip-head">
         <span>
           <strong>{edge.id}</strong>
+          {override && (
+            <span className="ov-tag">
+              {override.id} · {override.fromM.toFixed(0)}–{override.toM.toFixed(0)} m
+            </span>
+          )}
           {edge.name && <span className="muted"> · {edge.name}</span>}
           <span className="muted">
             {' '}

@@ -54,12 +54,25 @@ export interface EdgeSection {
   components: SectionComponent[];
 }
 
+/**
+ * A stretch of an edge carrying a different section than the base. Anchored
+ * parametrically by station (Plan v2 §1.2) so it survives geometry edits.
+ * Transitions at its boundaries are always derived, never stored (§3.2).
+ */
+export interface SectionOverride {
+  id: string;
+  fromM: number; // station along the edge, metres
+  toM: number;
+  section: EdgeSection;
+}
+
 export interface StreetEdge {
   id: string;
   a: string;                 // node id at points[0]
   b: string;                 // node id at points[last]
   points: number[];          // flat [x0, y0, ...] centerline, metres; endpoints mirror node coords
   section: EdgeSection | null;
+  overrides?: SectionOverride[];
   highway?: string;          // OSM highway class
   name?: string;
   oneway?: boolean;

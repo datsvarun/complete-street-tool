@@ -33,6 +33,8 @@ function canJoin(e1: StreetEdge, e2: StreetEdge, node: string): boolean {
   if (e1.id === e2.id) return false;
   if (e1.highway !== e2.highway) return false;
   if (e1.section !== e2.section) return false;
+  // Station-anchored overrides don't survive splicing — keep such nodes.
+  if (e1.overrides?.length || e2.overrides?.length) return false;
   if (!!e1.oneway !== !!e2.oneway) return false;
   // Oneway edges may only join head-to-tail (no direction flip).
   if (e1.oneway) {
