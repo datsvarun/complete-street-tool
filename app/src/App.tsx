@@ -6,6 +6,7 @@ import { SectionsPanel } from './components/SectionsPanel';
 import { CanvasStage } from './components/CanvasStage';
 import { StripEditor } from './components/StripEditor';
 import { GeocodeSearch } from './components/GeocodeSearch';
+import { JunctionsPanel } from './components/JunctionsPanel';
 
 export default function App() {
   const stage = useCst((s) => s.stage);
@@ -54,7 +55,15 @@ export default function App() {
         </div>
       </header>
       <main>
-        <aside>{stage === 'sections' ? <SectionsPanel /> : <NetworkPanel />}</aside>
+        <aside>
+          {stage === 'sections' ? (
+            <SectionsPanel />
+          ) : stage === 'junctions' ? (
+            <JunctionsPanel />
+          ) : (
+            <NetworkPanel />
+          )}
+        </aside>
         <div className="canvas-col">
           <CanvasStage />
           {stage === 'sections' && <StripEditor />}

@@ -129,14 +129,74 @@ function spansForEdge(edge: StreetEdge): Span[] | null {
 }
 
 /**
- * Full edge geometry: constant spans render via exact sub-polyline offsets,
- * transition spans sample smoothstep-blended boundaries (§3.2.3). Carriageway
- * centerline holds position — the section stays centered (align: 'center').
+ * Sample smoothstep-blended component polygons along `path` between stations
+ * [from, to] (§3.2.3). Shared by mid-edge overrides and node transitions.
  */
-export function buildEdgeGeometry(edge: StreetEdge): { bands: RibbonBand[]; markings: RibbonMarking[] } {
-  const spans = spansForEdge(edge);
+export function sampleTransitionBands(
+  path: number[],
+  matched: MatchedComponent[],
+  from: number,
+  to: number,
+  keyPrefix: string,
+): RibbonBand[] {
+  const zoneLen = to - from;
+  if (zoneLen < 0.05) return [];
+  const bands: RibbonBand[] = [];
+  const nSamples = Math.max(4, Math.ceil(zoneLen / SAMPLE_STEP_M) + 1);
+  const stations: number[] = [];
+  for (let k = 0; k < nSamples; k++) stations.push(from + (zoneLen * k) / (nSamples - 1));
+  const samplePts = stations.map((s) => pointAtStation(path, s));
+  const blend = stations.map((s) => smoothstep((s - from) / zoneLen));
+
+  // Per-sample cumulative offsets, centered on the total width at that sample
+  // (align 'center': the carriageway centerline holds position).
+  const widths = (ci: number, k: number) =>
+    matched[ci].w1 + (matched[ci].w2 - matched[ci].w1) * blend[k];
+  const totals = stations.map((_, k) => matched.reduce((sum, _c, ci) => sum + widths(ci, k), 0));
+
+  let upper = stations.map((_, k) => totals[k] / 2);
+  matched.forEach((c, ci) => {
+    const lower = upper.map((u, k) => u - widths(ci, k));
+    if (Math.max(...upper.map((u, k) => u - lower[k])) > 0.02) {
+      const poly: number[] = [];
+      for (let k = 0; k < nSamples; k++) {
+        poly.push(samplePts[k].x + samplePts[k].nx * upper[k], samplePts[k].y + samplePts[k].ny * upper[k]);
+      }
+      for (let k = nSamples - 1; k >= 0; k--) {
+        poly.push(samplePts[k].x + samplePts[k].nx * lower[k], samplePts[k].y + samplePts[k].ny * lower[k]);
+      }
+      bands.push({
+        key: `${keyPrefix}-t${ci}-${c.element}`,
+        element: c.element,
+        kind: c.kind,
+        widthM: (c.w1 + c.w2) / 2,
+        polygon: poly,
+      });
+    }
+    upper = lower;
+  });
+  return bands;
+}
+
+/**
+ * Full edge geometry: constant spans render via exact sub-polyline offsets,
+ * transition spans sample smoothstep-blended boundaries (§3.2.3).
+ * `trim` clips the ends (junction polygons / node transitions own that space).
+ */
+export function buildEdgeGeometry(
+  edge: StreetEdge,
+  trim?: { start: number; end: number },
+): { bands: RibbonBand[]; markings: RibbonMarking[] } {
+  let spans = spansForEdge(edge);
   if (!spans) return { bands: [], markings: [] };
   const L = polylineLength(edge.points);
+  const t0 = trim?.start ?? 0;
+  const t1 = L - (trim?.end ?? 0);
+  if (t0 > 0 || t1 < L) {
+    spans = spans
+      .map((s) => ({ ...s, from: Math.max(s.from, t0), to: Math.min(s.to, t1) }))
+      .filter((s) => s.to - s.from > 0.05);
+  }
   const bands: RibbonBand[] = [];
   const markings: RibbonMarking[] = [];
 
@@ -151,44 +211,7 @@ export function buildEdgeGeometry(edge: StreetEdge): { bands: RibbonBand[]; mark
       r.markings.forEach((m) => markings.push({ ...m, key: `s${si}-${m.key}` }));
       return;
     }
-
-    // Transition zone: sampled blended offsets.
-    const matched = span.matched!;
-    const zoneLen = span.to - span.from;
-    const nSamples = Math.max(4, Math.ceil(zoneLen / SAMPLE_STEP_M) + 1);
-    const stations: number[] = [];
-    for (let k = 0; k < nSamples; k++) stations.push(span.from + (zoneLen * k) / (nSamples - 1));
-    const samplePts = stations.map((s) => pointAtStation(edge.points, s));
-    const blend = stations.map((s) => smoothstep((s - span.from) / zoneLen));
-
-    // Per-sample cumulative offsets, centered on the total width at that sample.
-    const widths = (ci: number, k: number) =>
-      matched[ci].w1 + (matched[ci].w2 - matched[ci].w1) * blend[k];
-    const totals = stations.map((_, k) =>
-      matched.reduce((sum, _c, ci) => sum + widths(ci, k), 0),
-    );
-
-    let upper = stations.map((_, k) => totals[k] / 2);
-    matched.forEach((c, ci) => {
-      const lower = upper.map((u, k) => u - widths(ci, k));
-      if (Math.max(...upper.map((u, k) => u - lower[k])) > 0.02) {
-        const poly: number[] = [];
-        for (let k = 0; k < nSamples; k++) {
-          poly.push(samplePts[k].x + samplePts[k].nx * upper[k], samplePts[k].y + samplePts[k].ny * upper[k]);
-        }
-        for (let k = nSamples - 1; k >= 0; k--) {
-          poly.push(samplePts[k].x + samplePts[k].nx * lower[k], samplePts[k].y + samplePts[k].ny * lower[k]);
-        }
-        bands.push({
-          key: `s${si}-t${ci}-${c.element}`,
-          element: c.element,
-          kind: c.kind,
-          widthM: (c.w1 + c.w2) / 2,
-          polygon: poly,
-        });
-      }
-      upper = lower;
-    });
+    bands.push(...sampleTransitionBands(edge.points, span.matched!, span.from, span.to, `s${si}`));
   });
 
   return { bands, markings };

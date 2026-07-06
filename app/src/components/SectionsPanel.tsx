@@ -6,21 +6,16 @@ import type { ComponentKind } from '../types';
 export function SectionsPanel() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
-  const selectedOverrideId = useCst((s) => s.selectedOverrideId);
   const reviewList = useCst((s) => s.reviewList);
   const statusMsg = useCst((s) => s.statusMsg);
+  const tool = useCst((s) => s.tool);
+  const setTool = useCst((s) => s.setTool);
   const assignSection = useCst((s) => s.assignSection);
   const selectEdge = useCst((s) => s.selectEdge);
-  const selectOverride = useCst((s) => s.selectOverride);
-  const addOverride = useCst((s) => s.addOverride);
-  const removeOverride = useCst((s) => s.removeOverride);
   const dismissReview = useCst((s) => s.dismissReview);
   const autoAssign = useCst((s) => s.autoAssign);
   const selected = selectedEdgeId ? (edges[selectedEdgeId] ?? null) : null;
-  const selectedOverride =
-    (selectedOverrideId && selected?.overrides?.find((o) => o.id === selectedOverrideId)) || null;
-  const targetSection = selectedOverride ? selectedOverride.section : selected?.section ?? null;
-  const currentCatalog = getSection(targetSection?.catalogId ?? null);
+  const currentCatalog = getSection(selected?.section?.catalogId ?? null);
 
   const usedKinds = new Set<ComponentKind>();
   for (const e of Object.values(edges)) {
@@ -44,46 +39,25 @@ export function SectionsPanel() {
       ) : (
         <p className="muted">Click a street on the canvas, or an item in the review list.</p>
       )}
-      {selected?.section && !selectedOverride && (
+      {selected?.section && (
         <button className="danger" onClick={() => assignSection(selected.id, null)}>
           Remove section
         </button>
       )}
 
-      {selected?.section && (
-        <>
-          <h3>Overrides · transitions</h3>
-          <ul className="review-list">
-            <li className={!selectedOverrideId ? 'active' : ''}>
-              <button onClick={() => selectOverride(null)}>
-                <strong>base</strong>
-                <span className="muted small"> whole street</span>
-              </button>
-            </li>
-            {(selected.overrides ?? []).map((o) => (
-              <li key={o.id} className={o.id === selectedOverrideId ? 'active' : ''}>
-                <button onClick={() => selectOverride(o.id)}>
-                  <strong>{o.id}</strong>
-                  <span className="muted small">
-                    {' '}
-                    {o.fromM.toFixed(0)}–{o.toM.toFixed(0)} m ·{' '}
-                    {getSection(o.section.catalogId)?.rowWidthM ?? 'custom'}
-                    {getSection(o.section.catalogId) ? ' m ROW' : ''}
-                  </span>
-                </button>
-                <button className="dismiss" title="Remove override" onClick={() => removeOverride(selected.id, o.id)}>
-                  ✕
-                </button>
-              </li>
-            ))}
-          </ul>
-          <button onClick={() => addOverride(selected.id)}>+ Add override (mid-street change)</button>
-          <p className="muted small">
-            Transitions at override boundaries are derived automatically — drag the round handles
-            on the canvas to move them.
-          </p>
-        </>
-      )}
+      <h3>Mid-street section change</h3>
+      <div className="tool-row">
+        <button
+          className={tool === 'split' ? 'active' : ''}
+          onClick={() => setTool(tool === 'split' ? 'select' : 'split')}
+        >
+          {tool === 'split' ? 'Splitting — click a street' : 'Split street at a point'}
+        </button>
+      </div>
+      <p className="muted small">
+        Split a street, then give each part its own section — the shared node
+        becomes a smooth transition automatically.
+      </p>
 
       <h3>Auto-assignment</h3>
       <button onClick={() => autoAssign()}>Assign from highway class</button>
@@ -106,12 +80,7 @@ export function SectionsPanel() {
         </>
       )}
 
-      <h3>
-        IRC SP:118-2018 catalog
-        {selected && (
-          <span className="muted"> → {selectedOverride ? selectedOverride.id : 'base'}</span>
-        )}
-      </h3>
+      <h3>IRC SP:118-2018 catalog</h3>
       <div className="catalog">
         {CATALOG_BY_ROW.map((group) => (
           <details key={group.rowWidthM} open={group.rowWidthM === 24}>

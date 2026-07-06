@@ -195,6 +195,10 @@ aside {
   width: 100%;
 }
 
+.edge-list.tall {
+  max-height: 340px;
+}
+
 .small {
   font-size: 12px;
 }

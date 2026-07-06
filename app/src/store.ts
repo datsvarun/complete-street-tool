@@ -17,7 +17,6 @@ import { fetchOverpass, parseOsm, toLocal, DEFAULT_IMPORT } from './osm/overpass
 import type { LatLon } from './osm/overpass';
 import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
-import { polylineLength } from './geometry/polyline';
 
 // One shared store across all stages; stage is a UI mode, not a data boundary
 // (Plan v2 §1.1). The graph core (nodes/edges) is the undoable slice.
@@ -36,7 +35,6 @@ interface CstState extends GraphState {
   importTarget: LatLon | null;
   selectedEdgeId: string | null;
   draft: DraftVert[];
-  selectedOverrideId: string | null; // section edits target this override when set
   dcCandidates: DcCandidate[] | null; // null = not scanned yet
   highlightEdges: string[];
   pendingFit: Bounds | null;
@@ -56,10 +54,7 @@ interface CstState extends GraphState {
   updateSectionComponents: (edgeId: string, components: SectionComponent[]) => void;
   autoAssign: () => void;
   dismissReview: (edgeId: string) => void;
-  selectOverride: (id: string | null) => void;
-  addOverride: (edgeId: string) => void;
-  removeOverride: (edgeId: string, ovId: string) => void;
-  updateOverrideRange: (edgeId: string, ovId: string, fromM: number, toM: number) => void;
+  focusNode: (nodeId: string) => void;
   moveNodeTo: (id: string, x: number, y: number) => void;
   mergeNodePair: (keep: string, drop: string) => void;
   splitEdgeAt: (edgeId: string, x: number, y: number) => void;
@@ -93,11 +88,12 @@ export const useCst = create<CstState>()(
       ...EMPTY_GRAPH,
       stage: 'network',
       tool: 'select',
-      origin: null,
-      basemap: 'none',
+      // Anchored from the start so the basemap is visible on load; imports and
+      // (on an empty graph) geocoding re-anchor it.
+      origin: { lat: DEFAULT_IMPORT.lat, lon: DEFAULT_IMPORT.lon },
+      basemap: 'osm',
       importTarget: null,
       selectedEdgeId: null,
-      selectedOverrideId: null,
       draft: [],
       dcCandidates: null,
       highlightEdges: [],
@@ -132,8 +128,7 @@ export const useCst = create<CstState>()(
       },
 
       cancelDraft: () => set({ draft: [] }),
-      selectEdge: (id) => set({ selectedEdgeId: id, selectedOverrideId: null }),
-      selectOverride: (id) => set({ selectedOverrideId: id }),
+      selectEdge: (id) => set({ selectedEdgeId: id }),
 
       removeEdge: (id) =>
         set((s) => ({
@@ -151,13 +146,6 @@ export const useCst = create<CstState>()(
           const section = cat ? materialize(cat) : null;
           const e = s.edges[edgeId];
           if (!e) return {};
-          // With an override selected, the catalog assigns INTO the override.
-          if (s.selectedOverrideId && section) {
-            const overrides = (e.overrides ?? []).map((o) =>
-              o.id === s.selectedOverrideId ? { ...o, section } : o,
-            );
-            return { edges: { ...s.edges, [edgeId]: { ...e, overrides } } };
-          }
           return {
             edges: { ...s.edges, [edgeId]: { ...e, section } },
             reviewList: s.reviewList.filter((r) => r.edgeId !== edgeId),
@@ -167,75 +155,13 @@ export const useCst = create<CstState>()(
       updateSectionComponents: (edgeId, components) =>
         set((s) => {
           const e = s.edges[edgeId];
-          if (!e) return {};
-          if (s.selectedOverrideId) {
-            const overrides = (e.overrides ?? []).map((o) =>
-              o.id === s.selectedOverrideId
-                ? { ...o, section: { ...o.section, components } }
-                : o,
-            );
-            return { edges: { ...s.edges, [edgeId]: { ...e, overrides } } };
-          }
-          if (!e.section) return {};
+          if (!e?.section) return {};
           return {
             edges: {
               ...s.edges,
               [edgeId]: { ...e, section: { ...e.section, components } },
             },
           };
-        }),
-
-      addOverride: (edgeId) =>
-        set((s) => {
-          const e = s.edges[edgeId];
-          if (!e?.section) return { statusMsg: 'Assign a base section first' };
-          const L = polylineLength(e.points);
-          if (L < 20) return { statusMsg: 'Street too short for an override' };
-          const maxN = Math.max(0, ...(e.overrides ?? []).map((o) => parseInt(o.id.slice(2), 10) || 0));
-          const ov = {
-            id: `ov${maxN + 1}`,
-            fromM: Math.round(L / 3),
-            toM: Math.round((2 * L) / 3),
-            section: { ...e.section, components: e.section.components.map((c) => ({ ...c })) },
-          };
-          return {
-            edges: { ...s.edges, [edgeId]: { ...e, overrides: [...(e.overrides ?? []), ov] } },
-            selectedOverrideId: ov.id,
-            statusMsg: `Override ${ov.id} added — pick a section for it from the catalog`,
-          };
-        }),
-
-      removeOverride: (edgeId, ovId) =>
-        set((s) => {
-          const e = s.edges[edgeId];
-          if (!e) return {};
-          const overrides = (e.overrides ?? []).filter((o) => o.id !== ovId);
-          return {
-            edges: { ...s.edges, [edgeId]: { ...e, overrides: overrides.length ? overrides : undefined } },
-            selectedOverrideId: s.selectedOverrideId === ovId ? null : s.selectedOverrideId,
-          };
-        }),
-
-      updateOverrideRange: (edgeId, ovId, fromM, toM) =>
-        set((s) => {
-          const e = s.edges[edgeId];
-          if (!e) return {};
-          const L = polylineLength(e.points);
-          const others = (e.overrides ?? []).filter((o) => o.id !== ovId);
-          let lo = 1;
-          let hi = L - 1;
-          const self = (e.overrides ?? []).find((o) => o.id === ovId);
-          if (!self) return {};
-          for (const o of others) {
-            if (o.toM <= self.fromM + 0.01) lo = Math.max(lo, o.toM + 2);
-            if (o.fromM >= self.toM - 0.01) hi = Math.min(hi, o.fromM - 2);
-          }
-          const f = Math.max(lo, Math.min(fromM, toM - 5));
-          const t = Math.min(hi, Math.max(toM, f + 5));
-          const overrides = (e.overrides ?? []).map((o) =>
-            o.id === ovId ? { ...o, fromM: f, toM: t } : o,
-          );
-          return { edges: { ...s.edges, [edgeId]: { ...e, overrides } } };
         }),
 
       autoAssign: () =>
@@ -341,8 +267,9 @@ export const useCst = create<CstState>()(
 
       goTo: (p, label) =>
         set((s) => {
-          if (!s.origin) {
-            // Nothing anchored yet: the searched place becomes the origin.
+          // With no design yet, re-anchor the origin at the searched place so
+          // local coordinates (and projection accuracy) stay centered on it.
+          if (!s.origin || Object.keys(s.edges).length === 0) {
             return {
               origin: p,
               importTarget: p,
@@ -355,6 +282,15 @@ export const useCst = create<CstState>()(
             importTarget: p,
             pendingFit: { minX: x - 260, minY: y - 260, maxX: x + 260, maxY: y + 260 },
             statusMsg: `Centered on ${label} — importing here replaces the current network`,
+          };
+        }),
+
+      focusNode: (nodeId) =>
+        set((s) => {
+          const n = s.nodes[nodeId];
+          if (!n) return {};
+          return {
+            pendingFit: { minX: n.x - 60, minY: n.y - 60, maxX: n.x + 60, maxY: n.y + 60 },
           };
         }),
     }),

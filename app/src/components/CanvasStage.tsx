@@ -1,15 +1,17 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Line, Circle, Group, Ring } from 'react-konva';
+import { Stage, Layer, Line, Circle, Ring } from 'react-konva';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
 import { KIND_COLORS } from '../catalog';
 import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
-import { pointAtStation, projectOnPolyline, dist, subPolyline } from '../geometry/polyline';
+import { projectOnPolyline, dist } from '../geometry/polyline';
 import { nodeClassOf } from '../types';
 import type { GraphNode, Snap, StreetEdge, Tool } from '../types';
 import { degree } from '../graph/ops';
+import { deriveNodeArtifacts } from '../graph/junctions';
+import type { EdgeTrim } from '../graph/junctions';
 
 Konva.dragDistance = 3; // don't treat a pan drag as a click
 
@@ -84,16 +86,23 @@ function EdgeShape({
   selected,
   highlighted,
   tool,
+  showSections,
+  trim,
 }: {
   edge: StreetEdge;
   selected: boolean;
   highlighted: boolean;
   tool: Tool;
+  showSections: boolean;
+  trim?: EdgeTrim;
 }) {
   const selectEdge = useCst((s) => s.selectEdge);
   const splitEdgeAt = useCst((s) => s.splitEdgeAt);
   const section = edge.section;
-  const { bands, markings } = useMemo(() => buildEdgeGeometry(edge), [edge]);
+  const { bands, markings } = useMemo(
+    () => (showSections ? buildEdgeGeometry(edge, trim) : { bands: [], markings: [] }),
+    [edge, showSections, trim],
+  );
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
     if (tool === 'select') {
       e.cancelBubble = true;
@@ -107,7 +116,7 @@ function EdgeShape({
       splitEdgeAt(edge.id, wx, wy);
     }
   };
-  const s = edgeStroke(edge, selected, highlighted, !!section);
+  const s = edgeStroke(edge, selected, highlighted, showSections && !!section);
 
   return (
     <>
@@ -138,7 +147,7 @@ function EdgeShape({
         points={edge.points}
         stroke={s.stroke}
         strokeWidth={s.width}
-        dash={section && !selected ? [6, 6] : edge.carriagewayType === 'divided' ? [10, 4] : undefined}
+        dash={showSections && section && !selected ? [6, 6] : edge.carriagewayType === 'divided' ? [10, 4] : undefined}
         strokeScaleEnabled={false}
         hitStrokeWidth={12}
         onClick={onClick}
@@ -152,11 +161,15 @@ function EdgesLayerImpl({
   selectedEdgeId,
   highlightEdges,
   tool,
+  showSections,
+  trims,
 }: {
   edges: StreetEdge[];
   selectedEdgeId: string | null;
   highlightEdges: string[];
   tool: Tool;
+  showSections: boolean;
+  trims: Record<string, EdgeTrim>;
 }) {
   return (
     <Layer>
@@ -167,6 +180,8 @@ function EdgesLayerImpl({
           selected={e.id === selectedEdgeId}
           highlighted={highlightEdges.includes(e.id)}
           tool={tool}
+          showSections={showSections}
+          trim={trims[e.id]}
         />
       ))}
     </Layer>
@@ -221,89 +236,6 @@ function NodesLayerImpl({
   );
 }
 const NodesLayer = memo(NodesLayerImpl);
-
-/** Draggable start/end handles for the selected edge's section overrides
- *  (Plan v2 §3.2 done-when: dragging live-updates the tapers). */
-function OverrideHandles({ edge, scale }: { edge: StreetEdge; scale: number }) {
-  const selectedOverrideId = useCst((s) => s.selectedOverrideId);
-  const selectOverride = useCst((s) => s.selectOverride);
-  const updateOverrideRange = useCst((s) => s.updateOverrideRange);
-  const overrides = edge.overrides ?? [];
-  if (overrides.length === 0) return null;
-
-  const stationOfPointer = (px: number, py: number) => {
-    const proj = projectOnPolyline(edge.points, px, py);
-    return proj ? proj.station : null;
-  };
-
-  return (
-    <Layer>
-      {overrides.map((o) => {
-        const zone = subPolyline(edge.points, o.fromM, o.toM);
-        const active = o.id === selectedOverrideId;
-        const ends: Array<['fromM' | 'toM', number]> = [['fromM', o.fromM], ['toM', o.toM]];
-        return (
-          <Group key={o.id}>
-            <Line
-              points={zone}
-              stroke={active ? '#c9581f' : 'rgba(201,88,31,0.45)'}
-              strokeWidth={active ? 4 : 3}
-              dash={[2, 6]}
-              strokeScaleEnabled={false}
-              hitStrokeWidth={12}
-              onClick={(e) => {
-                e.cancelBubble = true;
-                selectOverride(o.id);
-              }}
-            />
-            {ends.map(([field, st]) => {
-              const p = pointAtStation(edge.points, st);
-              return (
-                <Circle
-                  key={field}
-                  x={p.x}
-                  y={p.y}
-                  radius={6 / scale}
-                  fill="#fff"
-                  stroke="#c9581f"
-                  strokeWidth={2.5}
-                  strokeScaleEnabled={false}
-                  draggable
-                  onDragStart={(e) => {
-                    e.cancelBubble = true;
-                    selectOverride(o.id);
-                    useCst.temporal.getState().pause();
-                  }}
-                  onDragMove={(e) => {
-                    const st2 = stationOfPointer(e.target.x(), e.target.y());
-                    if (st2 === null) return;
-                    updateOverrideRange(
-                      edge.id,
-                      o.id,
-                      field === 'fromM' ? st2 : o.fromM,
-                      field === 'toM' ? st2 : o.toM,
-                    );
-                    // keep the handle glued to the centerline
-                    const cur = useCst.getState().edges[edge.id]?.overrides?.find((x) => x.id === o.id);
-                    if (cur) {
-                      const p2 = pointAtStation(edge.points, cur[field]);
-                      e.target.position({ x: p2.x, y: p2.y });
-                    }
-                  }}
-                  onDragEnd={() => {
-                    useCst.temporal.getState().resume();
-                    const cur = useCst.getState().edges[edge.id]?.overrides?.find((x) => x.id === o.id);
-                    if (cur) updateOverrideRange(edge.id, o.id, cur.fromM, cur.toM);
-                  }}
-                />
-              );
-            })}
-          </Group>
-        );
-      })}
-    </Layer>
-  );
-}
 
 function findSnap(
   wx: number,
@@ -362,6 +294,16 @@ export function CanvasStage() {
     for (const n of nodeList) d[n.id] = degree(g, n.id);
     return d;
   }, [nodes, edges, nodeList]);
+
+  // Derived node artifacts (§1.2): junction polygons, node transitions, trims.
+  const showSections = stage !== 'network';
+  const artifacts = useMemo(
+    () =>
+      showSections
+        ? deriveNodeArtifacts({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 })
+        : { junctions: [], transitions: [], trims: {} },
+    [nodes, edges, showSections],
+  );
 
   useEffect(() => {
     const el = containerRef.current!;
@@ -473,10 +415,12 @@ export function CanvasStage() {
     tool === 'draw'
       ? 'Click to add points (snaps to nodes/edges · Shift = 15° angles) · double-click or Enter to finish · Esc to cancel'
       : tool === 'split'
-        ? 'Click a street to insert a node'
+        ? 'Click a street to insert a node (a node between different sections becomes a transition)'
         : stage === 'sections'
           ? 'Click a street to select it, then pick a section from the panel'
-          : 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge';
+          : stage === 'junctions'
+            ? 'Junction polygons are derived from the graph — pick one from the panel to zoom to it'
+            : 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge';
 
   const previewPoints =
     tool === 'draw' && draft.length >= 1 && cursor
@@ -527,11 +471,41 @@ export function CanvasStage() {
         onMouseMove={onMouseMove}
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
+        {showSections && (
+          <Layer listening={false}>
+            {artifacts.junctions.map((j) => (
+              <Line
+                key={j.nodeId}
+                points={j.polygon}
+                closed
+                fill="#525e6a"
+                stroke={stage === 'junctions' ? '#e08e45' : 'rgba(30,35,40,0.4)'}
+                strokeWidth={stage === 'junctions' ? 1.5 : 0.6}
+                strokeScaleEnabled={false}
+              />
+            ))}
+            {artifacts.transitions.flatMap((t) =>
+              t.bands.map((b) => (
+                <Line
+                  key={`${t.nodeId}-${b.key}`}
+                  points={b.polygon}
+                  closed
+                  fill={KIND_COLORS[b.kind]}
+                  stroke="rgba(30,35,40,0.35)"
+                  strokeWidth={0.6}
+                  strokeScaleEnabled={false}
+                />
+              )),
+            )}
+          </Layer>
+        )}
         <EdgesLayer
           edges={edgeList}
           selectedEdgeId={selectedEdgeId}
           highlightEdges={highlightEdges}
           tool={tool}
+          showSections={showSections}
+          trims={artifacts.trims}
         />
         {stage === 'network' && (
           <NodesLayer
@@ -540,9 +514,6 @@ export function CanvasStage() {
             scale={view.scale}
             draggable={tool === 'select'}
           />
-        )}
-        {stage === 'sections' && selectedEdgeId && edges[selectedEdgeId] && (
-          <OverrideHandles edge={edges[selectedEdgeId]} scale={view.scale} />
         )}
         <Layer listening={false}>
           {draftFlat.length >= 4 && (
