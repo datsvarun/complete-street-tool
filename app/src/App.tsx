@@ -8,7 +8,8 @@ import { GeocodeSearch } from './components/GeocodeSearch';
 import { JunctionsPanel } from './components/JunctionsPanel';
 import { DetailingPanel } from './components/DetailingPanel';
 import { ExportPanel } from './components/ExportPanel';
-import { StageRail, ToolRail } from './components/FloatingUI';
+import { EditPanel } from './components/EditPanel';
+import { StageRail, TopToolbar } from './components/FloatingUI';
 import type { Stage, Tool } from './types';
 
 const STAGE_KEYS: Record<string, Stage> = {
@@ -16,11 +17,13 @@ const STAGE_KEYS: Record<string, Stage> = {
   '2': 'sections',
   '3': 'junctions',
   '4': 'detailing',
-  '5': 'export',
+  '5': 'edit',
+  '6': 'export',
 };
 
 const TOOL_KEYS: Record<string, Tool> = {
   v: 'select',
+  a: 'direct',
   d: 'draw',
   x: 'split',
   m: 'marquee',
@@ -49,7 +52,10 @@ export default function App() {
         e.preventDefault();
         s.selectAll();
       } else if (e.key === 'Escape') {
-        if (s.draft.length > 0) s.cancelDraft();
+        if (s.boxDraw) s.setBoxDraw(null);
+        else if (s.draft.length > 0) s.cancelDraft();
+        else if (s.patchDraft.length > 0) s.cancelPatch();
+        else if (s.patchKind) s.setPatchKind(null);
         else if (s.placeKind) s.setPlaceKind(null);
         else if (s.tool !== 'select') s.setTool('select');
         else if (s.selectedElementId) s.selectElement(null);
@@ -57,8 +63,11 @@ export default function App() {
         else s.selectEdge(null);
       } else if (e.key === 'Enter' && s.draft.length >= 2) {
         s.finishDraft(0.5);
+      } else if (e.key === 'Enter' && s.patchDraft.length >= 6) {
+        s.finishPatch();
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (s.selectedElementId) s.removeElement(s.selectedElementId);
+        if (s.selectedPatchId) s.removePatch(s.selectedPatchId);
+        else if (s.selectedElementId) s.removeElement(s.selectedElementId);
         else if (s.selectedEdgeIds.length > 0) s.removeEdges(s.selectedEdgeIds);
       } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (STAGE_KEYS[k]) {
@@ -66,8 +75,7 @@ export default function App() {
           setPanelOpen(true);
         } else if (TOOL_KEYS[k]) {
           // draw/split only exist where their rail shows them
-          if (TOOL_KEYS[k] === 'draw' && s.stage !== 'network') return;
-          if (TOOL_KEYS[k] === 'split' && s.stage !== 'network' && s.stage !== 'sections') return;
+          if ((TOOL_KEYS[k] === 'draw' || TOOL_KEYS[k] === 'split') && s.stage !== 'network') return;
           s.setTool(TOOL_KEYS[k]);
         } else if (k === 'f') {
           s.fitAll();
@@ -86,6 +94,7 @@ export default function App() {
         <span className="brand">
           CST <span className="muted">· IRC Street Designer</span>
         </span>
+        <TopToolbar />
         <GeocodeSearch />
         <div className="header-actions">
           <label className="opacity-slider" title="Design layer transparency (see the basemap through the plan)">
@@ -112,7 +121,6 @@ export default function App() {
           {stage === 'sections' && <StripEditor />}
         </div>
         <StageRail panelOpen={panelOpen} onToggle={setPanelOpen} />
-        <ToolRail />
         {panelOpen && (
           <div className="floating-panel overlay">
             <button className="panel-close" title="Close panel (P)" onClick={() => setPanelOpen(false)}>
@@ -124,6 +132,8 @@ export default function App() {
               <JunctionsPanel />
             ) : stage === 'detailing' ? (
               <DetailingPanel />
+            ) : stage === 'edit' ? (
+              <EditPanel />
             ) : stage === 'export' ? (
               <ExportPanel />
             ) : (

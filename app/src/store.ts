@@ -7,6 +7,8 @@ import type {
   GraphState,
   JunctionDesign,
   JunctionType,
+  Patch,
+  PatchKind,
   ReviewItem,
   SectionComponent,
   SelectMode,
@@ -34,7 +36,7 @@ import {
 } from './graph/ops';
 import { runStandardPipeline } from './graph/transforms';
 import { detectDualCarriageways, manualDcCandidate, mergeDualCarriageway } from './graph/dualCarriageway';
-import { fetchOverpass, parseOsm, toLocal, DEFAULT_IMPORT } from './osm/overpass';
+import { fetchOverpass, fetchOverpassBbox, parseOsm, toLatLon, toLocal, DEFAULT_IMPORT } from './osm/overpass';
 import type { LatLon } from './osm/overpass';
 import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
@@ -66,6 +68,16 @@ interface CstState extends GraphState {
   placeKind: ElementKind | null;      // active palette tool (UI state)
   placeVariant: string | null;        // e.g. turn arrow direction
   selectedElementId: string | null;
+  /** Stage 3.5 edit: free-form patches (undoable) + drawing state (not). */
+  patches: Record<string, Patch>;
+  nextPatchNum: number;
+  patchKind: PatchKind | null;        // armed material for drawing
+  patchDraft: number[];               // in-progress polygon
+  selectedPatchId: string | null;
+  /** Rectangle-drawing mode: import extent or export extent (world metres). */
+  boxDraw: 'import' | 'export' | null;
+  importBox: Bounds | null;
+  exportBounds: Bounds | null;
   designOpacity: number;              // 0.2–1, sections/junctions layer alpha
   draft: DraftVert[];
   dcCandidates: DcCandidate[] | null; // null = not scanned yet
@@ -93,6 +105,7 @@ interface CstState extends GraphState {
   removeEdge: (id: string) => void;
   removeNode: (id: string) => void;
   assignSection: (edgeId: string, catalogId: string | null) => void;
+  assignSectionToSelected: (catalogId: string | null) => void;
   updateSectionComponents: (edgeId: string, components: SectionComponent[]) => void;
   updateSectionRef: (edgeId: string, refM: number) => void;
   removeNodeSmart: (nodeId: string) => void;
@@ -106,6 +119,9 @@ interface CstState extends GraphState {
   simplifyAll: (tolM: number) => void;
   cleanNetwork: () => void;
   importOsm: (lat: number, lon: number, radiusM: number) => Promise<void>;
+  importOsmBbox: () => Promise<void>;
+  setBoxDraw: (purpose: 'import' | 'export' | null) => void;
+  setBox: (purpose: 'import' | 'export', b: Bounds | null) => void;
   loadSample: () => Promise<void>;
   scanDualCarriageways: () => void;
   applyDcMerge: (c: DcCandidate) => void;
@@ -121,6 +137,14 @@ interface CstState extends GraphState {
   clearSuggestions: () => void;
   setEdgeLanes: (edgeId: string, lanes: number) => void;
   selectJunction: (key: string | null) => void;
+  setPatchKind: (kind: PatchKind | null) => void;
+  addPatchVert: (x: number, y: number) => void;
+  finishPatch: () => void;
+  cancelPatch: () => void;
+  removePatch: (id: string) => void;
+  selectPatch: (id: string | null) => void;
+  movePatchVertex: (id: string, idx: number, x: number, y: number) => void;
+  removePatchVertex: (id: string, idx: number) => void;
   undo: () => void;
   redo: () => void;
   pruneSelections: () => void;
@@ -194,6 +218,14 @@ export const useCst = create<CstState>()(
       placeKind: null,
       placeVariant: null,
       selectedElementId: null,
+      patches: {},
+      nextPatchNum: 1,
+      patchKind: null,
+      patchDraft: [],
+      selectedPatchId: null,
+      boxDraw: null,
+      importBox: null,
+      exportBounds: null,
       designOpacity: 1,
       draft: [],
       dcCandidates: null,
@@ -209,8 +241,11 @@ export const useCst = create<CstState>()(
         // + review list (Plan v2 §3.3), never overwriting existing work.
         if (stage === 'sections') {
           const s = get();
-          const hasUnassigned = Object.values(s.edges).some((e) => !e.section && e.highway);
-          if (hasUnassigned) get().autoAssign();
+          const edges = Object.values(s.edges);
+          // Only on a FRESH graph (nothing assigned yet) — re-running on every
+          // tab switch would resurrect review items the user dismissed.
+          const fresh = edges.length > 0 && edges.every((e) => !e.section) && edges.some((e) => e.highway);
+          if (fresh) get().autoAssign();
         }
       },
       setTool: (tool) => set((s) => ({ tool, draft: tool === 'draw' ? s.draft : [] })),
@@ -350,6 +385,25 @@ export const useCst = create<CstState>()(
           return {
             edges: { ...s.edges, [edgeId]: { ...e, section } },
             reviewList: s.reviewList.filter((r) => r.edgeId !== edgeId),
+          };
+        }),
+
+      assignSectionToSelected: (catalogId) =>
+        set((s) => {
+          const ids = s.selectedEdgeIds.filter((id) => s.edges[id]);
+          if (ids.length === 0) return {};
+          const cat = getSection(catalogId);
+          const edges = { ...s.edges };
+          for (const id of ids) {
+            edges[id] = { ...edges[id], section: cat ? materialize(cat) : null };
+          }
+          return {
+            edges,
+            reviewList: s.reviewList.filter((r) => !ids.includes(r.edgeId)),
+            statusMsg:
+              ids.length > 1
+                ? `section ${cat ? 'applied to' : 'removed from'} ${ids.length} streets`
+                : '',
           };
         }),
 
@@ -511,6 +565,9 @@ export const useCst = create<CstState>()(
             elements: {},
             nextElementNum: 1,
             junctionDesigns: {},
+            patches: {},
+            nextPatchNum: 1,
+            selectedPatchId: null,
             reviewList: [],
             dcCandidates: null,
             highlightEdges: [],
@@ -539,12 +596,64 @@ export const useCst = create<CstState>()(
           elements: {},
           nextElementNum: 1,
           junctionDesigns: {},
+          patches: {},
+          nextPatchNum: 1,
+          selectedPatchId: null,
           reviewList: [],
           dcCandidates: null,
           highlightEdges: [],
           pendingFit: graphBounds(cleaned.g),
           statusMsg: `Sample: ${Object.keys(cleaned.g.edges).length} edges / ${Object.keys(cleaned.g.nodes).length} nodes (${cleaned.summary})`,
         });
+      },
+
+      setBoxDraw: (purpose) =>
+        set({
+          boxDraw: purpose,
+          statusMsg: purpose ? `drag a rectangle on the canvas to set the ${purpose} area` : '',
+        }),
+
+      setBox: (purpose, b) =>
+        set(purpose === 'import' ? { importBox: b, boxDraw: null } : { exportBounds: b, boxDraw: null }),
+
+      importOsmBbox: async () => {
+        const s = get();
+        if (!s.importBox || !s.origin) return;
+        const { minX, minY, maxX, maxY } = s.importBox;
+        // y-down: minY is the NORTH edge
+        const nw = toLatLon(s.origin, minX, minY);
+        const se = toLatLon(s.origin, maxX, maxY);
+        const center = toLatLon(s.origin, (minX + maxX) / 2, (minY + maxY) / 2);
+        set({ importBusy: true, statusMsg: 'Fetching the selected area from Overpass…' });
+        try {
+          const data = await fetchOverpassBbox(se.lat, nw.lon, nw.lat, se.lon);
+          const g = parseOsm(data, center);
+          const cleaned = runStandardPipeline(g);
+          set({
+            ...cleaned.g,
+            origin: center,
+            importBusy: false,
+            selectedEdgeId: null,
+            selectedEdgeIds: [],
+            selectedElementId: null,
+            selectedJunctionKey: null,
+            placeKind: null,
+            elements: {},
+            nextElementNum: 1,
+            junctionDesigns: {},
+            patches: {},
+            nextPatchNum: 1,
+            selectedPatchId: null,
+            reviewList: [],
+            dcCandidates: null,
+            highlightEdges: [],
+            importBox: null,
+            pendingFit: graphBounds(cleaned.g),
+            statusMsg: `Imported ${Object.keys(cleaned.g.edges).length} edges / ${Object.keys(cleaned.g.nodes).length} nodes (${cleaned.summary})`,
+          });
+        } catch (err) {
+          set({ importBusy: false, statusMsg: `Import failed: ${(err as Error).message}` });
+        }
       },
 
       scanDualCarriageways: () =>
@@ -691,6 +800,57 @@ export const useCst = create<CstState>()(
 
       selectJunction: (key) => set({ selectedJunctionKey: key }),
 
+      setPatchKind: (kind) => set({ patchKind: kind, patchDraft: [], selectedPatchId: null }),
+
+      addPatchVert: (x, y) => set((s) => ({ patchDraft: [...s.patchDraft, x, y] })),
+
+      finishPatch: () =>
+        set((s) => {
+          if (s.patchDraft.length < 6 || !s.patchKind) return { patchDraft: [] };
+          const id = `p${s.nextPatchNum}`;
+          return {
+            patches: { ...s.patches, [id]: { id, kind: s.patchKind, points: s.patchDraft } },
+            nextPatchNum: s.nextPatchNum + 1,
+            patchDraft: [],
+            selectedPatchId: id,
+            statusMsg: `${s.patchKind} patch added — drag its vertices to refine`,
+          };
+        }),
+
+      cancelPatch: () => set({ patchDraft: [] }),
+
+      removePatch: (id) =>
+        set((s) => {
+          const patches = { ...s.patches };
+          delete patches[id];
+          return {
+            patches,
+            selectedPatchId: s.selectedPatchId === id ? null : s.selectedPatchId,
+            statusMsg: 'patch removed',
+          };
+        }),
+
+      selectPatch: (id) => set({ selectedPatchId: id }),
+
+      movePatchVertex: (id, idx, x, y) =>
+        set((s) => {
+          const p = s.patches[id];
+          if (!p || idx < 0 || idx * 2 >= p.points.length) return {};
+          const points = p.points.slice();
+          points[idx * 2] = x;
+          points[idx * 2 + 1] = y;
+          return { patches: { ...s.patches, [id]: { ...p, points } } };
+        }),
+
+      removePatchVertex: (id, idx) =>
+        set((s) => {
+          const p = s.patches[id];
+          if (!p || p.points.length <= 6) return {};
+          const points = p.points.slice();
+          points.splice(idx * 2, 2);
+          return { patches: { ...s.patches, [id]: { ...p, points } } };
+        }),
+
       // Undo/redo restore the graph slice only; volatile selections must be
       // re-validated against the restored records or they dangle (§7 of
       // ARCHITECTURE.md). Always undo through these, never temporal directly.
@@ -710,10 +870,15 @@ export const useCst = create<CstState>()(
           const junctionAlive =
             s.selectedJunctionKey?.split('+').every((nid) => s.nodes[nid]) ?? false;
           return {
+            // Derived UI lists describe the pre-undo world — reconcile/clear.
+            reviewList: s.reviewList.filter((r) => s.edges[r.edgeId] && !s.edges[r.edgeId].section),
+            dcCandidates: null,
             selectedEdgeIds: ids,
             selectedEdgeId: s.selectedEdgeId && s.edges[s.selectedEdgeId] ? s.selectedEdgeId : ids[ids.length - 1] ?? null,
             selectedElementId:
               s.selectedElementId && s.elements[s.selectedElementId] ? s.selectedElementId : null,
+            selectedPatchId:
+              s.selectedPatchId && s.patches[s.selectedPatchId] ? s.selectedPatchId : null,
             selectedJunctionKey: junctionAlive ? s.selectedJunctionKey : null,
           };
         }),
@@ -783,12 +948,15 @@ export const useCst = create<CstState>()(
         junctionDesigns: s.junctionDesigns,
         elements: s.elements,
         nextElementNum: s.nextElementNum,
+        patches: s.patches,
+        nextPatchNum: s.nextPatchNum,
       }),
       equality: (a, b) =>
         a.nodes === b.nodes &&
         a.edges === b.edges &&
         a.junctionDesigns === b.junctionDesigns &&
-        a.elements === b.elements,
+        a.elements === b.elements &&
+        a.patches === b.patches,
       limit: 100,
     },
   ),

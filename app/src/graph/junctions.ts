@@ -43,6 +43,7 @@ const MIN_TRIM_M = 1;
 const MERGE_FRACTION = 0.75; // trims consuming this much of an edge merge its junctions
 const MIN_RADIUS_M = 1.2;
 const MAX_TANGENT_FRACTION = 0.45; // of the approach length
+const MIN_WEDGE_ANGLE = 0.6;       // rad (~35°) — no wedge in slip-lane slivers
 
 /** Kerb radius defaults by the street classes meeting at the corner,
  *  metres — IRC:103-2012 kerb radii (verify against the document). */
@@ -485,7 +486,12 @@ function computeJunction(
     // Corner wedge: raised stacks bridge outward along the same corner path.
     const stackA = a.stackR;
     const stackB = next.stackL;
-    if (stackA.length > 0 || stackB.length > 0) {
+    // Very acute corners (slip lanes, Y-merges): the sliver between two
+    // near-parallel streets can't carry a sensible wedge — the bands would
+    // lie across the mouths. Leave the surface bare (probe method, slice J7).
+    const angularGap =
+      (((approaches[(i + 1) % k].angle - a.angle) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    if ((stackA.length > 0 || stackB.length > 0) && angularGap > MIN_WEDGE_ANGLE) {
       // dedupe joints: duplicated points make zero-length segments whose
       // normals vanish and pinch the sampled bands into spikes
       let path = chaikinSmooth(toFlat(dedupePts(toPts([...segARev, ...corner.arc, ...(segB ?? [])]), 0.08)));
@@ -496,12 +502,22 @@ function computeJunction(
         const mid = pointAtStation(path, pathLen / 2);
         const towardOut =
           dist(mid.x + mid.nx, mid.y + mid.ny, cx, cy) > dist(mid.x, mid.y, cx, cy);
-        let matched = matchComponents(stackA, stackB);
+        let [s1, s2] = towardOut ? [stackA, stackB] : [stackB, stackA];
         if (!towardOut) {
           const rev: number[] = [];
           for (let m = path.length - 2; m >= 0; m -= 2) rev.push(path[m], path[m + 1]);
           path = rev;
-          matched = matchComponents(stackB, stackA);
+        }
+        let matched = matchComponents(s1, s2);
+        // Wholly unmatched stacks (footpath meeting a green verge): drop/
+        // introduce tapers would sweep slivers across both mouths. Pave the
+        // corner as ONE apron instead — a single band morphing between the
+        // stack totals, in the wider stack's outermost material.
+        if (!matched.some((c) => c.w1 > 0.01 && c.w2 > 0.01)) {
+          const t1 = s1.reduce((s, c) => s + c.widthM, 0);
+          const t2 = s2.reduce((s, c) => s + c.widthM, 0);
+          const donor = (t1 >= t2 ? s1[0] : s2[0]) ?? s1[0] ?? s2[0];
+          matched = [{ element: donor.element, kind: donor.kind, w1: t1, w2: t2 }];
         }
         wedges.push(
           ...sampleTransitionBands(path, matched, 0, pathLen, `w${i}`, 1, 1).map((b) => ({

@@ -1,7 +1,7 @@
 // Stage 4 export: serialize the full design to a self-contained SVG plan.
 // Reuses the exact derivation the canvas uses (buildEdgeGeometry, junction
 // artifacts, element graphics) so the printed drawing matches the screen.
-import type { GraphState, JunctionDesign, StreetElement } from '../types';
+import type { GraphState, JunctionDesign, Patch, StreetElement } from '../types';
 import { KIND_COLORS } from '../catalog';
 import { buildEdgeGeometry } from '../sections/transition';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
@@ -31,6 +31,7 @@ export function planContent(
   g: GraphState,
   designs: Record<string, JunctionDesign>,
   elements: StreetElement[],
+  patches: Patch[] = [],
 ): string {
   const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs);
   const out: string[] = [];
@@ -80,6 +81,18 @@ export function planContent(
     }
   }
 
+  // 6. edit-stage patches (cuts erase to the plan ground colour)
+  for (const p of patches) {
+    out.push(
+      poly(
+        p.points,
+        p.kind === 'cut' ? '#f0ede4' : KIND_COLORS[p.kind as keyof typeof KIND_COLORS],
+        'rgba(30,35,40,0.35)',
+        0.12,
+      ),
+    );
+  }
+
   return out.join('\n');
 }
 
@@ -99,15 +112,17 @@ export function buildPlanSvg(
   return framePlanSvg(g, planContent(g, designs, elements), opts);
 }
 
-/** Frame precomputed plan content — cheap, safe to re-run per title keystroke. */
+/** Frame precomputed plan content — cheap, safe to re-run per title keystroke.
+ *  `boundsOverride` crops the plan to a user-drawn extent. */
 export function framePlanSvg(
   g: GraphState,
   content: string,
   opts: PlanOptions,
+  boundsOverride?: { minX: number; minY: number; maxX: number; maxY: number } | null,
 ): { svg: string; widthMm: number; heightMm: number } | null {
-  const b = graphBounds(g);
+  const b = boundsOverride ?? graphBounds(g);
   if (!b) return null;
-  const marginM = 8;
+  const marginM = boundsOverride ? 0 : 8;
   const worldW = b.maxX - b.minX + marginM * 2;
   const worldH = b.maxY - b.minY + marginM * 2;
   // metres → mm on paper: 1 world metre = 1000/scaleDenom mm
@@ -146,7 +161,8 @@ export function framePlanSvg(
     `<rect width="${num(pageW)}" height="${num(pageH)}" fill="#faf8f2"/>` +
     // plan frame
     `<rect x="${padMm}" y="${padMm}" width="${num(planWmm)}" height="${num(planHmm)}" fill="#f0ede4" stroke="#999" stroke-width="0.3"/>` +
-    `<g transform="translate(${num(tx)} ${num(ty)}) scale(${num(mmPerM)})">${content}</g>` +
+    `<clipPath id="planclip"><rect x="${padMm}" y="${padMm}" width="${num(planWmm)}" height="${num(planHmm)}"/></clipPath>` +
+    `<g clip-path="url(#planclip)"><g transform="translate(${num(tx)} ${num(ty)}) scale(${num(mmPerM)})">${content}</g></g>` +
     // title block
     `<g font-family="system-ui, sans-serif">` +
     `<text x="${padMm}" y="${num(padMm + planHmm + 14)}" font-size="5" font-weight="bold" fill="#1c2733">${esc(opts.title)}</text>` +

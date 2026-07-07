@@ -3,6 +3,8 @@ import { useCst, DEFAULT_IMPORT } from '../store';
 import { polylineLength } from '../geometry/polyline';
 import { validateGraph } from '../graph/validate';
 
+const MAX_IMPORT_KM2 = 3; // keeps the Overpass query and the graph tractable
+
 export function NetworkPanel() {
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
@@ -17,6 +19,11 @@ export function NetworkPanel() {
   const simplifyAll = useCst((s) => s.simplifyAll);
   const cleanNetwork = useCst((s) => s.cleanNetwork);
   const importOsm = useCst((s) => s.importOsm);
+  const importOsmBbox = useCst((s) => s.importOsmBbox);
+  const setBoxDraw = useCst((s) => s.setBoxDraw);
+  const boxDraw = useCst((s) => s.boxDraw);
+  const importBox = useCst((s) => s.importBox);
+  const setBox = useCst((s) => s.setBox);
   const loadSample = useCst((s) => s.loadSample);
   const scanDualCarriageways = useCst((s) => s.scanDualCarriageways);
   const applyDcMerge = useCst((s) => s.applyDcMerge);
@@ -43,7 +50,39 @@ export function NetworkPanel() {
     <div className="panel">
       <h2>Network</h2>
 
-      <h3>Import OSM</h3>
+      <h3>Import OSM — by area</h3>
+      <p className="muted small">
+        Pan/zoom (or search a place) to the area you want, draw a box, confirm,
+        and only that extent downloads.
+      </p>
+      <div className="tool-row">
+        <button className={boxDraw === 'import' ? 'active' : ''} onClick={() => setBoxDraw(boxDraw === 'import' ? null : 'import')}>
+          {boxDraw === 'import' ? 'Drag on canvas…' : importBox ? 'Redraw area' : 'Draw import area'}
+        </button>
+        {importBox && (
+          <button onClick={() => setBox('import', null)}>Clear</button>
+        )}
+      </div>
+      {importBox && (() => {
+        const wKm = (importBox.maxX - importBox.minX) / 1000;
+        const hKm = (importBox.maxY - importBox.minY) / 1000;
+        const km2 = wKm * hKm;
+        const over = km2 > MAX_IMPORT_KM2;
+        return (
+          <>
+            <p className={over ? 'small issues-inline' : 'muted small'}>
+              {(wKm * 1000).toFixed(0)} × {(hKm * 1000).toFixed(0)} m ·{' '}
+              {km2 < 0.01 ? `${(km2 * 100).toFixed(1)} ha` : `${km2.toFixed(2)} km²`}
+              {over ? ` — too large (max ${MAX_IMPORT_KM2} km²), draw a smaller box` : ''}
+            </p>
+            <button disabled={over || importBusy} onClick={() => importOsmBbox()}>
+              {importBusy ? 'Downloading…' : 'Download this area'}
+            </button>
+          </>
+        );
+      })()}
+
+      <h3>Import OSM — by point</h3>
       <div className="field-row">
         <label>
           lat
@@ -61,7 +100,14 @@ export function NetworkPanel() {
       <div className="tool-row">
         <button
           disabled={importBusy}
-          onClick={() => importOsm(parseFloat(lat), parseFloat(lon), parseFloat(radius))}
+          onClick={() => {
+            const la = parseFloat(lat), lo = parseFloat(lon), r = parseFloat(radius);
+            if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) {
+              useCst.setState({ statusMsg: 'Enter a valid lat/lon before importing' });
+              return;
+            }
+            importOsm(la, lo, Math.min(Math.max(Number.isFinite(r) ? r : 250, 50), 1500));
+          }}
         >
           Import from OSM
         </button>

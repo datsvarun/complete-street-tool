@@ -10,7 +10,7 @@ export function SectionsPanel() {
   const statusMsg = useCst((s) => s.statusMsg);
   const tool = useCst((s) => s.tool);
   const setTool = useCst((s) => s.setTool);
-  const assignSection = useCst((s) => s.assignSection);
+  const assignSectionToSelected = useCst((s) => s.assignSectionToSelected);
   const selectEdge = useCst((s) => s.selectEdge);
   const dismissReview = useCst((s) => s.dismissReview);
   const autoAssign = useCst((s) => s.autoAssign);
@@ -40,7 +40,7 @@ export function SectionsPanel() {
         <p className="muted">Click a street on the canvas, or an item in the review list.</p>
       )}
       {selected?.section && (
-        <button className="danger" onClick={() => assignSection(selected.id, null)}>
+        <button className="danger" onClick={() => assignSectionToSelected(null)}>
           Remove section
         </button>
       )}
@@ -91,7 +91,7 @@ export function SectionsPanel() {
                 className={currentCatalog?.id === s.id ? 'catalog-item active' : 'catalog-item'}
                 disabled={!selected}
                 title={selected ? undefined : 'Select a street first'}
-                onClick={() => selected && assignSection(selected.id, s.id)}
+                onClick={() => selected && assignSectionToSelected(s.id)}
               >
                 <span>{s.name}</span>
                 <span className="muted">Σ {s.totalWidthM.toFixed(2)} m</span>

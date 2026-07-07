@@ -11,7 +11,8 @@ const STAGES: Array<{ id: Stage; label: string; icon: string; hint: string }> = 
   { id: 'sections', label: 'Street', icon: '☰', hint: 'Assign cross-sections (2)' },
   { id: 'junctions', label: 'Junction', icon: '✚', hint: 'Fillets, trims & movements (3)' },
   { id: 'detailing', label: 'Detail', icon: '❖', hint: 'Furniture, markings, crossings (4)' },
-  { id: 'export', label: 'Export', icon: '⇩', hint: 'Print or download the plan (5)' },
+  { id: 'edit', label: 'Edit', icon: '✦', hint: 'Free-form shape patches & cuts (5)' },
+  { id: 'export', label: 'Export', icon: '⇩', hint: 'Print or download the plan (6)' },
 ];
 
 export function StageRail({
@@ -46,32 +47,39 @@ export function StageRail({
   );
 }
 
-const TOOLS: Array<{ id: Tool; icon: string; hint: string; stages?: Stage[] }> = [
-  { id: 'select', icon: '➤', hint: 'Select — click, Shift adds, Ctrl toggles (V)' },
-  { id: 'marquee', icon: '▭', hint: 'Rectangle select — drag a box (M)' },
-  { id: 'lasso', icon: '◌', hint: 'Lasso select — draw around streets (L)' },
-  { id: 'draw', icon: '✎', hint: 'Draw streets (D)', stages: ['network'] },
-  { id: 'split', icon: '✂', hint: 'Split a street at a point (X)', stages: ['network', 'sections'] },
+const TOOLS: Array<{ id: Tool; icon: string; label: string; hint: string; stages?: Stage[] }> = [
+  { id: 'select', icon: '➤', label: 'Select', hint: 'Selection — click streets, Shift adds, Ctrl toggles (V)' },
+  { id: 'direct', icon: '▷', label: 'Direct', hint: 'Direct selection — move nodes and vertices (A)' },
+  { id: 'marquee', icon: '▭', label: 'Rect', hint: 'Rectangle select — drag a box (M)' },
+  { id: 'lasso', icon: '◌', label: 'Lasso', hint: 'Lasso select — draw around streets (L)' },
+  { id: 'draw', icon: '✎', label: 'Draw', hint: 'Draw streets (D)', stages: ['network'] },
+  { id: 'split', icon: '✂', label: 'Split', hint: 'Split a street at a point (X)', stages: ['network'] },
 ];
 
-export function ToolRail() {
+/** Standard tools live in the top bar; stage panels keep only their own
+ *  domain-specific choices. Stage-inapplicable tools disable, not hide. */
+export function TopToolbar() {
   const stage = useCst((s) => s.stage);
   const tool = useCst((s) => s.tool);
   const setTool = useCst((s) => s.setTool);
-  const tools = TOOLS.filter((t) => !t.stages || t.stages.includes(stage));
-  if (stage === 'export') return null;
+  if (stage === 'export') return <div className="top-toolbar" />;
   return (
-    <div className="tool-rail overlay">
-      {tools.map((t) => (
-        <button
-          key={t.id}
-          className={tool === t.id ? 'rail-btn active' : 'rail-btn'}
-          title={t.hint}
-          onClick={() => setTool(tool === t.id ? 'select' : t.id)}
-        >
-          <span className="rail-icon small">{t.icon}</span>
-        </button>
-      ))}
+    <div className="top-toolbar">
+      {TOOLS.map((t) => {
+        const enabled = !t.stages || t.stages.includes(stage);
+        return (
+          <button
+            key={t.id}
+            className={tool === t.id ? 'tt-btn active' : 'tt-btn'}
+            title={t.hint + (enabled ? '' : ' — Network stage only')}
+            disabled={!enabled}
+            onClick={() => setTool(tool === t.id ? 'select' : t.id)}
+          >
+            <span className="tt-icon">{t.icon}</span>
+            <span className="tt-label">{t.label}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }

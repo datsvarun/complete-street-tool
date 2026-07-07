@@ -44,15 +44,24 @@ export function buildQuery(lat: number, lon: number, radiusM: number): string {
   return `[out:json][timeout:30];(way["highway"](${bbox});>;);out body;`;
 }
 
-export async function fetchOverpass(lat: number, lon: number, radiusM: number): Promise<OsmJson> {
+async function runOverpass(query: string): Promise<OsmJson> {
   const res = await fetch(OVERPASS_URL, {
     method: 'POST',
-    body: `data=${encodeURIComponent(buildQuery(lat, lon, radiusM))}`,
+    body: `data=${encodeURIComponent(query)}`,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     signal: AbortSignal.timeout(45_000),
   });
   if (!res.ok) throw new Error(`Overpass returned ${res.status}`);
   return (await res.json()) as OsmJson;
+}
+
+export async function fetchOverpass(lat: number, lon: number, radiusM: number): Promise<OsmJson> {
+  return runOverpass(buildQuery(lat, lon, radiusM));
+}
+
+/** Exact-extent fetch: only the user-confirmed box downloads. */
+export async function fetchOverpassBbox(south: number, west: number, north: number, east: number): Promise<OsmJson> {
+  return runOverpass(`[out:json][timeout:30];(way["highway"](${south},${west},${north},${east});>;);out body;`);
 }
 
 /**

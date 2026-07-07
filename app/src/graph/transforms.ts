@@ -19,6 +19,10 @@ export function collapseShortEdges(g0: GraphState): { g: GraphState; collapsed: 
       if (degree(g, e.a) < 3 || degree(g, e.b) < 3) continue;
       const na = g.nodes[e.a];
       const nb = g.nodes[e.b];
+      // Delete the collapsing edge FIRST — mergeNodes only removes self-loops
+      // under 1 m, and a curved 8 m edge would survive as a permanent loop.
+      g = { ...g, edges: { ...g.edges } };
+      delete g.edges[e.id];
       g = moveNode(g, e.a, (na.x + nb.x) / 2, (na.y + nb.y) / 2);
       g = mergeNodes(g, e.a, e.b);
       collapsed += 1;
@@ -33,6 +37,9 @@ function canJoin(e1: StreetEdge, e2: StreetEdge, node: string): boolean {
   if (e1.id === e2.id) return false;
   if (e1.highway !== e2.highway) return false;
   if (e1.section !== e2.section) return false;
+  // A divided edge must not splice with an undivided neighbour — it would
+  // silently lose (or wrongly spread) the divided flag and median width.
+  if (e1.carriagewayType !== e2.carriagewayType) return false;
   // Station-anchored overrides don't survive splicing — keep such nodes.
   if (e1.overrides?.length || e2.overrides?.length) return false;
   if (!!e1.oneway !== !!e2.oneway) return false;

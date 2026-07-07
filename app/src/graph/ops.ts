@@ -296,9 +296,22 @@ export function commitDraft(
       return { x: n.x, y: n.y, nodeId: n.id };
     }
     if (v.snap?.type === 'edge') {
-      const res = g.edges[v.snap.id]
-        ? splitEdge(g, v.snap.id, v.x, v.y, tol)
-        : { g, nodeId: null };
+      // The snapped edge may have been split by an EARLIER vertex of this
+      // same draft (its id is gone). Re-resolve against the current graph —
+      // falling through would create a disconnected node sitting on the
+      // street and break planarity.
+      let targetId: string | null = g.edges[v.snap.id] ? v.snap.id : null;
+      if (!targetId) {
+        let bestD = 1.5;
+        for (const e of Object.values(g.edges)) {
+          const proj = projectOnPolyline(e.points, v.x, v.y);
+          if (proj && proj.dist < bestD) {
+            bestD = proj.dist;
+            targetId = e.id;
+          }
+        }
+      }
+      const res = targetId ? splitEdge(g, targetId, v.x, v.y, tol) : { g, nodeId: null };
       if (res.nodeId) {
         g = res.g;
         const n = g.nodes[res.nodeId];

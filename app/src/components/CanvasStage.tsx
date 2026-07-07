@@ -10,7 +10,7 @@ import { buildEdgeGeometry } from '../sections/transition';
 import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts, pointInPolygon } from '../geometry/polyline';
 import { BasemapFab, ScaleBar, CompassRose } from './FloatingUI';
 import { nodeClassOf } from '../types';
-import type { GraphNode, Snap, StreetEdge, StreetElement, Tool } from '../types';
+import type { GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { elementGraphics, laneDividers } from '../detailing/elements';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
@@ -353,7 +353,15 @@ const NodesLayer = memo(NodesLayerImpl);
 
 /** Interior polyline vertices (OSM way bends that aren't graph nodes):
  *  draggable to reshape the street, right-click to remove. */
-function VerticesLayerImpl({ edges, scale }: { edges: StreetEdge[]; scale: number }) {
+function VerticesLayerImpl({
+  edges,
+  scale,
+  draggable,
+}: {
+  edges: StreetEdge[];
+  scale: number;
+  draggable: boolean;
+}) {
   const moveVertex = useCst((s) => s.moveVertex);
   const removeVertex = useCst((s) => s.removeVertex);
   const r = 2.4 / scale;
@@ -373,7 +381,8 @@ function VerticesLayerImpl({ edges, scale }: { edges: StreetEdge[]; scale: numbe
               stroke="#5a6674"
               strokeWidth={1}
               strokeScaleEnabled={false}
-              draggable
+              draggable={draggable}
+              {...(draggable ? hoverCursor('move') : {})}
               onContextMenu={(ev) => {
                 ev.evt.preventDefault();
                 ev.cancelBubble = true;
@@ -633,6 +642,95 @@ function ArtifactsLayerImpl({
 }
 const ArtifactsLayer = memo(ArtifactsLayerImpl);
 
+/** Edit-stage patches: closed material polygons (or ground cuts) with
+ *  draggable vertices — the manual escape hatch over the derived design. */
+function PatchesLayerImpl({
+  patches,
+  interactive,
+  selectedPatchId,
+  scale,
+}: {
+  patches: Patch[];
+  interactive: boolean;
+  selectedPatchId: string | null;
+  scale: number;
+}) {
+  const selectPatch = useCst((s) => s.selectPatch);
+  const removePatch = useCst((s) => s.removePatch);
+  const movePatchVertex = useCst((s) => s.movePatchVertex);
+  const removePatchVertex = useCst((s) => s.removePatchVertex);
+  const r = 4 / scale;
+  return (
+    <Layer listening={interactive}>
+      {patches.map((p) => (
+        <Line
+          key={p.id}
+          points={p.points}
+          closed
+          fill={p.kind === 'cut' ? '#f4f2ec' : KIND_COLORS[p.kind]}
+          stroke={
+            p.id === selectedPatchId
+              ? '#e08e45'
+              : p.kind === 'cut'
+                ? 'rgba(160,70,60,0.55)'
+                : 'rgba(30,35,40,0.4)'
+          }
+          strokeWidth={p.id === selectedPatchId ? 1.6 : 0.8}
+          dash={p.kind === 'cut' ? [4, 3] : undefined}
+          strokeScaleEnabled={false}
+          onClick={(ev) => {
+            if (!interactive) return;
+            ev.cancelBubble = true;
+            selectPatch(p.id);
+          }}
+          onContextMenu={(ev) => {
+            ev.evt.preventDefault();
+            ev.cancelBubble = true;
+            removePatch(p.id);
+          }}
+          {...(interactive ? hoverCursor('pointer') : {})}
+        />
+      ))}
+      {interactive &&
+        selectedPatchId &&
+        patches
+          .filter((p) => p.id === selectedPatchId)
+          .flatMap((p) => {
+            const out: React.ReactNode[] = [];
+            for (let i = 0; i * 2 < p.points.length; i++) {
+              out.push(
+                <Circle
+                  key={`${p.id}-v${i}`}
+                  x={p.points[i * 2]}
+                  y={p.points[i * 2 + 1]}
+                  radius={r}
+                  fill="#fff"
+                  stroke="#b3541e"
+                  strokeWidth={1.5}
+                  strokeScaleEnabled={false}
+                  draggable
+                  {...hoverCursor('move')}
+                  onDragStart={() => useCst.temporal.getState().pause()}
+                  onDragMove={(ev) => movePatchVertex(p.id, i, ev.target.x(), ev.target.y())}
+                  onDragEnd={(ev) => {
+                    useCst.temporal.getState().resume();
+                    movePatchVertex(p.id, i, ev.target.x(), ev.target.y());
+                  }}
+                  onContextMenu={(ev) => {
+                    ev.evt.preventDefault();
+                    ev.cancelBubble = true;
+                    removePatchVertex(p.id, i);
+                  }}
+                />,
+              );
+            }
+            return out;
+          })}
+    </Layer>
+  );
+}
+const PatchesLayer = memo(PatchesLayerImpl);
+
 const TURN_COLORS: Record<string, string> = {
   through: '#4a90d9',
   left: '#4CAF50',
@@ -764,6 +862,13 @@ export function CanvasStage() {
   const elements = useCst((s) => s.elements);
   const placeKind = useCst((s) => s.placeKind);
   const selectedElementId = useCst((s) => s.selectedElementId);
+  const patches = useCst((s) => s.patches);
+  const boxDraw = useCst((s) => s.boxDraw);
+  const importBox = useCst((s) => s.importBox);
+  const exportBounds = useCst((s) => s.exportBounds);
+  const patchKind = useCst((s) => s.patchKind);
+  const patchDraft = useCst((s) => s.patchDraft);
+  const selectedPatchId = useCst((s) => s.selectedPatchId);
   const designOpacity = useCst((s) => s.designOpacity);
   const highlightEdges = useCst((s) => s.highlightEdges);
   const draft = useCst((s) => s.draft);
@@ -774,6 +879,7 @@ export function CanvasStage() {
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const nodeList = useMemo(() => Object.values(nodes), [nodes]);
   const elementList = useMemo(() => Object.values(elements), [elements]);
+  const patchList = useMemo(() => Object.values(patches), [patches]);
   // Only the network stage renders nodes — don't pay O(nodes × edges) elsewhere.
   const degrees = useMemo(() => {
     const d: Record<string, number> = {};
@@ -872,7 +978,16 @@ export function CanvasStage() {
   };
 
   const onMouseDown = (e: KonvaEventObject<MouseEvent>) => {
-    if ((tool !== 'marquee' && tool !== 'lasso') || e.evt.button !== 0) return;
+    if (e.evt.button !== 0) return;
+    if (boxDraw) {
+      const w = toWorld(e.target.getStage()!);
+      if (!w) return;
+      const start = [w.x, w.y, w.x, w.y];
+      regionRef.current = start;
+      setRegion(start);
+      return;
+    }
+    if (tool !== 'marquee' && tool !== 'lasso') return;
     const w = toWorld(e.target.getStage()!);
     if (!w) return;
     const start = tool === 'marquee' ? [w.x, w.y, w.x, w.y] : [w.x, w.y];
@@ -885,6 +1000,20 @@ export function CanvasStage() {
     if (!r) return;
     regionRef.current = null;
     setRegion(null);
+    if (boxDraw && r.length === 4) {
+      const b = {
+        minX: Math.min(r[0], r[2]),
+        minY: Math.min(r[1], r[3]),
+        maxX: Math.max(r[0], r[2]),
+        maxY: Math.max(r[1], r[3]),
+      };
+      if ((b.maxX - b.minX) * view.scale > 8 && (b.maxY - b.minY) * view.scale > 8) {
+        useCst.getState().setBox(boxDraw, b);
+      } else {
+        useCst.getState().setBoxDraw(null);
+      }
+      return;
+    }
     const mode = e.evt.shiftKey ? 'add' : e.evt.ctrlKey || e.evt.metaKey ? 'toggle' : 'replace';
     let hit: string[] = [];
     if (tool === 'marquee' && r.length === 4) {
@@ -919,11 +1048,15 @@ export function CanvasStage() {
       // the previous vertex (which the stationary-dblclick check then eats).
       const s = findSnap(c.x, c.y, SNAP_PX / view.scale, nodes, edges);
       addDraftVert(s ? { x: s.x, y: s.y, snap: s } : { x: c.x, y: c.y, snap: null });
+    } else if (stage === 'edit' && patchKind) {
+      const w = toWorld(stageNode);
+      if (w) useCst.getState().addPatchVert(w.x, w.y);
     } else if (stage === 'detailing' && placeKind) {
       const w = toWorld(stageNode);
       if (w) useCst.getState().placeElementAt(w.x, w.y, 40 / view.scale);
     } else if (tool === 'select' && e.target === stageNode) {
       if (stage === 'detailing') useCst.getState().selectElement(null);
+      else if (stage === 'edit') useCst.getState().selectPatch(null);
       else if (stage === 'junctions') selectJunction(null);
       else useCst.getState().selectEdge(null);
     }
@@ -934,7 +1067,7 @@ export function CanvasStage() {
     if (!w) return;
     const r = regionRef.current;
     if (r) {
-      if (tool === 'marquee') {
+      if (boxDraw || tool === 'marquee') {
         const next = [r[0], r[1], w.x, w.y];
         regionRef.current = next;
         setRegion(next);
@@ -961,17 +1094,23 @@ export function CanvasStage() {
   // double-click is stationary: the last two draft points (click fires before
   // dblclick, so the duplicate is already in the draft) nearly coincide on screen.
   const onDblClick = () => {
+    if (stage === 'edit') {
+      const st = useCst.getState();
+      if (st.patchDraft.length >= 6) st.finishPatch();
+      return;
+    }
     if (tool !== 'draw') return;
     const d = useCst.getState().draft;
     if (d.length < 2) return;
     const a = d[d.length - 2];
     const b = d[d.length - 1];
-    if (dist(a.x, a.y, b.x, b.y) * view.scale < 6) finishDraft(1 / view.scale);
+    if (dist(a.x, a.y, b.x, b.y) * view.scale < 6) finishDraft(0.5);
   };
 
   const TOOL_HINTS: Partial<Record<Tool, string>> = {
     draw: 'Click to add points (snaps to nodes/edges · Shift = 15° angles) · double-click or Enter to finish · Esc to cancel',
     split: 'Click a street to insert a node (a node between different sections becomes a transition)',
+    direct: 'Direct selection — drag nodes to move/merge/weld, drag vertices to bend, right-click removes',
     marquee: 'Drag a box to select streets · Shift adds · Ctrl toggles · V returns to select',
     lasso: 'Draw around streets to select them · Shift adds · Ctrl toggles · V returns to select',
   };
@@ -982,9 +1121,14 @@ export function CanvasStage() {
     detailing: placeKind
       ? `Click a street to place a ${placeKind} · drag to move it within its band · right-click to remove`
       : 'Pick an element from the palette, or drag/right-click existing ones · Esc deselects tool',
+    edit: patchKind
+      ? `Click to add ${patchKind} patch vertices · Enter/double-click closes · Esc cancels`
+      : 'Pick a material to draw a patch, or click a patch to edit its vertices',
     export: 'Set up the title block in the panel, then print or download the plan',
   };
-  const hint = TOOL_HINTS[tool] ?? STAGE_HINTS[stage] ?? '';
+  const hint = boxDraw
+    ? `Drag a rectangle to set the ${boxDraw} area · Esc cancels`
+    : TOOL_HINTS[tool] ?? STAGE_HINTS[stage] ?? '';
 
   const previewPoints =
     tool === 'draw' && draft.length >= 1 && cursor
@@ -1001,7 +1145,7 @@ export function CanvasStage() {
       className={basemapActive ? 'canvas-host with-basemap' : 'canvas-host'}
       style={{
         cursor:
-          tool === 'draw' || tool === 'marquee' || tool === 'lasso'
+          tool === 'draw' || tool === 'marquee' || tool === 'lasso' || !!boxDraw || (stage === 'edit' && patchKind)
             ? 'crosshair'
             : tool === 'split'
               ? 'cell'
@@ -1025,7 +1169,7 @@ export function CanvasStage() {
         y={view.y}
         scaleX={view.scale}
         scaleY={view.scale}
-        draggable={tool === 'select'}
+        draggable={(tool === 'select' || tool === 'direct') && !boxDraw}
         onDragMove={(e) => {
           // live view sync while panning so the basemap tracks the drag
           if (e.target === e.target.getStage()) {
@@ -1063,16 +1207,26 @@ export function CanvasStage() {
           trims={artifacts.trims}
           opacity={showSections ? designOpacity : 1}
         />
-        {stage === 'network' && <VerticesLayer edges={edgeList} scale={view.scale} />}
+        {stage === 'network' && (
+          <VerticesLayer edges={edgeList} scale={view.scale} draggable={tool === 'direct'} />
+        )}
         {stage === 'network' && (
           <NodesLayer
             nodes={nodeList}
             degrees={degrees}
             scale={view.scale}
-            draggable={tool === 'select'}
+            draggable={tool === 'direct'}
           />
         )}
         {focusedJunction && <JunctionHandlesLayer j={focusedJunction} scale={view.scale} />}
+        {showSections && patchList.length > 0 && (
+          <PatchesLayer
+            patches={patchList}
+            interactive={stage === 'edit'}
+            selectedPatchId={selectedPatchId}
+            scale={view.scale}
+          />
+        )}
         {showSections && Object.keys(elements).length > 0 && (
           <DetailingLayer
             elements={elementList}
@@ -1086,6 +1240,17 @@ export function CanvasStage() {
         <Layer listening={false}>
           {draftFlat.length >= 4 && (
             <Line points={draftFlat} stroke="#b3541e" strokeWidth={2} strokeScaleEnabled={false} />
+          )}
+          {stage === 'edit' && patchDraft.length >= 2 && (
+            <Line
+              points={cursor ? [...patchDraft, cursor.x, cursor.y] : patchDraft}
+              closed={patchDraft.length >= 6}
+              stroke="#b3541e"
+              strokeWidth={1.5}
+              dash={[5, 4]}
+              fill={patchDraft.length >= 6 ? 'rgba(217,122,46,0.10)' : undefined}
+              strokeScaleEnabled={false}
+            />
           )}
           {previewPoints && (
             <Line
@@ -1108,7 +1273,48 @@ export function CanvasStage() {
               fill={snap.type === 'node' ? '#0a8f4b' : '#b3541e'}
             />
           )}
-          {region && tool === 'marquee' && region.length === 4 && (
+          {region && boxDraw && region.length === 4 && (
+            <Rect
+              x={Math.min(region[0], region[2])}
+              y={Math.min(region[1], region[3])}
+              width={Math.abs(region[2] - region[0])}
+              height={Math.abs(region[3] - region[1])}
+              fill={boxDraw === 'import' ? 'rgba(21,90,138,0.08)' : 'rgba(44,124,63,0.08)'}
+              stroke={boxDraw === 'import' ? '#155a8a' : '#2c7c3f'}
+              strokeWidth={1.5}
+              dash={[6, 4]}
+              strokeScaleEnabled={false}
+            />
+          )}
+          {!boxDraw && stage === 'network' && importBox && (
+            <Rect
+              x={importBox.minX}
+              y={importBox.minY}
+              width={importBox.maxX - importBox.minX}
+              height={importBox.maxY - importBox.minY}
+              stroke="#155a8a"
+              strokeWidth={1.5}
+              dash={[6, 4]}
+              fill="rgba(21,90,138,0.05)"
+              strokeScaleEnabled={false}
+              listening={false}
+            />
+          )}
+          {!boxDraw && stage === 'export' && exportBounds && (
+            <Rect
+              x={exportBounds.minX}
+              y={exportBounds.minY}
+              width={exportBounds.maxX - exportBounds.minX}
+              height={exportBounds.maxY - exportBounds.minY}
+              stroke="#2c7c3f"
+              strokeWidth={1.5}
+              dash={[6, 4]}
+              fill="rgba(44,124,63,0.04)"
+              strokeScaleEnabled={false}
+              listening={false}
+            />
+          )}
+          {region && !boxDraw && tool === 'marquee' && region.length === 4 && (
             <Rect
               x={Math.min(region[0], region[2])}
               y={Math.min(region[1], region[3])}

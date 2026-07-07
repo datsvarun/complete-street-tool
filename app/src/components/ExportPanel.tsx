@@ -9,6 +9,11 @@ export function ExportPanel() {
   const edges = useCst((s) => s.edges);
   const junctionDesigns = useCst((s) => s.junctionDesigns);
   const elements = useCst((s) => s.elements);
+  const patches = useCst((s) => s.patches);
+  const exportBounds = useCst((s) => s.exportBounds);
+  const boxDraw = useCst((s) => s.boxDraw);
+  const setBoxDraw = useCst((s) => s.setBoxDraw);
+  const setBox = useCst((s) => s.setBox);
 
   const [title, setTitle] = useState('Untitled Street Design');
   const [subtitle, setSubtitle] = useState('IRC SP:118-2018 · complete street plan');
@@ -17,17 +22,24 @@ export function ExportPanel() {
   // The expensive part (full-network derivation + geometry serialization) only
   // depends on the design; framing with the title block is cheap per keystroke.
   const content = useMemo(
-    () => planContent({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns, Object.values(elements)),
-    [nodes, edges, junctionDesigns, elements],
+    () =>
+      planContent(
+        { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 },
+        junctionDesigns,
+        Object.values(elements),
+        Object.values(patches),
+      ),
+    [nodes, edges, junctionDesigns, elements, patches],
   );
   const plan = useMemo(
     () =>
-      framePlanSvg({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, content, {
-        title,
-        subtitle,
-        scaleDenom,
-      }),
-    [nodes, edges, content, title, subtitle, scaleDenom],
+      framePlanSvg(
+        { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 },
+        content,
+        { title, subtitle, scaleDenom },
+        exportBounds,
+      ),
+    [nodes, edges, content, title, subtitle, scaleDenom, exportBounds],
   );
 
   const hasContent = Object.keys(edges).length > 0;
@@ -86,6 +98,26 @@ export function ExportPanel() {
           ))}
         </select>
       </label>
+
+      <h3>Extent</h3>
+      <div className="palette">
+        <button
+          className={boxDraw === 'export' ? 'chip active' : 'chip'}
+          onClick={() => setBoxDraw(boxDraw === 'export' ? null : 'export')}
+        >
+          {boxDraw === 'export' ? 'Drag on canvas…' : exportBounds ? 'Redraw extent' : 'Draw export extent'}
+        </button>
+        {exportBounds && (
+          <button className="chip" onClick={() => setBox('export', null)}>
+            Full network
+          </button>
+        )}
+      </div>
+      <p className="muted small">
+        {exportBounds
+          ? `Exporting ${Math.round(exportBounds.maxX - exportBounds.minX)} × ${Math.round(exportBounds.maxY - exportBounds.minY)} m extent.`
+          : 'Exporting the whole network. Draw an extent to crop the plan.'}
+      </p>
 
       <h3>Output</h3>
       <div className="palette">

@@ -42,6 +42,7 @@ scratch on every graph change**:
 | projection origin (lat/lon of local 0,0)   | transitions between differing sections        |
 | `JunctionDesign` overrides (only if touched)| junction surfaces, fillet arcs, wedges, trims |
 | `StreetElement` anchors (station+component)| element world positions & symbol polygons     |
+| `Patch` polygons (edit stage)              | — drawn verbatim; the manual escape hatch     |
 
 Consequences: there is no invalidation logic anywhere — mutate the graph and
 every artifact regenerates; user overrides survive regeneration because they
@@ -94,6 +95,9 @@ JunctionDesign { type, cornerOverrides:  Record<cornerKey, {radiusM?, chamfer?}>
 StreetElement { kind, edgeId, stationM,      // along the centerline
                 compIndex, t,                // across: component + 0..1 fraction
                 variant?, widthM?, placedBy? }
+
+Patch { kind: ComponentKind | 'cut',         // edit stage: free-form polygon
+        points: number[] }                   // painted material or ground cut
 ```
 
 **Invariants:**
@@ -252,26 +256,43 @@ Interaction notes (hard-won — do not "simplify" these away):
 
 ## 9. UI shell (`App.tsx`, `FloatingUI.tsx`)
 
-- Slim header: brand, Nominatim geocode search, design-opacity slider,
-  undo/redo.
+- Slim header: brand, **standard tool toolbar** (Selection ➤, Direct ▷ —
+  moves nodes/vertices, Rect, Lasso, Draw, Split; draw/split disable outside
+  the network stage), Nominatim geocode search, design-opacity slider,
+  undo/redo. Stage panels carry only their domain-specific choices.
 - **Stage rail** (left edge, vertical): Network → Street → Junction →
-  Detail → Export. Clicking the active stage toggles the **floating panel**
-  beside the rail (`panelOpen` is App-local state).
-- **Tool rail** below it, contextual: select/marquee/lasso everywhere,
-  draw (network), split (network+sections); hidden in export.
+  Detail → **Edit** → Export. Clicking the active stage toggles the
+  **floating panel** beside the rail (`panelOpen` is App-local state).
+- **Edit stage**: free-form patches — pick a material (or 'cut'), click
+  vertices, Enter/double-click closes; vertices drag, right-click removes.
+  Patches render above the derived design and export with the plan.
+- **Section multi-apply**: catalog clicks apply to every selected street
+  (`assignSectionToSelected`, one undo step).
+- **OSM import by area**: draw a bbox on the canvas (live size/area readout,
+  capped at 3 km²), confirm → exact-extent Overpass query re-anchored at the
+  box centre. **Export extent**: draw a crop box; the plan frame clips to it.
 - Bottom-left: basemap FAB (none/OSM/satellite) + reactive scale bar
   (1/2/5×10^k m targeting ~90 px). Top-right: compass (north-up; click =
   fit). Bottom-center: hint pill. Bottom-right: cursor coordinates.
 - **Keyboard map** (window listener in `App.tsx`, skipped when typing):
-  `1–5` stages · `V/M/L/D/X` tools · `F` fit · `P` panel toggle ·
-  `Ctrl+A` select all · `Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y` undo/redo ·
-  `Enter` finish draft · `Esc` cancel-chain (draft → place tool → tool →
-  element sel → junction sel → edge sel) · `Delete` remove selection.
+  `1–6` stages · `V/A/M/L/D/X` tools (A = Direct) · `F` fit · `P` panel
+  toggle · `Ctrl+A` select all · `Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y` undo/redo ·
+  `Enter` finish draft/patch · `Esc` cancel-chain (box draw → draft → patch →
+  place tool → tool → selections) · `Delete` removes patch/element/edges.
 
-## 10. Verification workflow (no unit tests — drive the real app)
+## 10. Verification workflow (vitest + drive the real app)
 
-Playwright scripts live in the session scratchpad (not committed) and drive a
-dev server on **port 5199**:
+Unit tests: `npm test` (vitest) covers the pure engine — `graph/ops.test.ts`
+(commitDraft planarity incl. the snap-after-split regression, self-loop
+guards, join metadata, graphBounds), `graph/transforms.test.ts` (short-edge
+collapse never leaves self-loops, divided/undivided splice guard, DC-merge
+shared-endpoint guard), `sections/transition.test.ts` (matcher symmetry,
+Y-merge, flip continuity). Add a regression test with every engine bug fix.
+
+Playwright drives the real app for everything interactive:
+
+Scripts live in the session scratchpad (not committed) and target a dev
+server on **port 5199**:
 
 ```js
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });

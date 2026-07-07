@@ -1,9 +1,9 @@
 // All coordinates are metres in a local planar CRS (x right, y down).
 // Lat/lon exists only at import/export boundaries (Plan v2 / CLAUDE.md rule).
 
-export type Stage = 'network' | 'sections' | 'junctions' | 'detailing' | 'export';
+export type Stage = 'network' | 'sections' | 'junctions' | 'detailing' | 'edit' | 'export';
 
-export type Tool = 'select' | 'draw' | 'split' | 'marquee' | 'lasso';
+export type Tool = 'select' | 'direct' | 'draw' | 'split' | 'marquee' | 'lasso';
 
 export type SelectMode = 'replace' | 'add' | 'toggle';
 
@@ -133,6 +133,18 @@ export interface StreetElement {
   variant?: string;    // turnarrow: 'left' | 'through' | 'right'
   widthM?: number;     // along-street width for zebra/raised/driveway
   placedBy?: 'user' | 'suggest';
+}
+
+// ── Stage 3.5 edit: free-form shape patches ─────────────────────────────
+// The escape hatch for geometry the parametric pipeline can't express:
+// compound walls, odd plot lines, hand-tuned corners. A patch is a closed
+// polygon painted in a component material, or 'cut' (erases to ground).
+export type PatchKind = ComponentKind | 'cut';
+
+export interface Patch {
+  id: string;
+  kind: PatchKind;
+  points: number[]; // flat closed polygon, world metres
 }
 
 /** The undoable graph core shared by all stages. */

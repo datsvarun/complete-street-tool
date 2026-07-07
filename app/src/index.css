@@ -61,6 +61,56 @@ header {
   gap: 6px;
 }
 
+.top-toolbar {
+  display: flex;
+  gap: 2px;
+  background: var(--panel-raised);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 3px;
+}
+
+.tt-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  min-width: 46px;
+  padding: 3px 8px 2px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.tt-btn:hover:not(:disabled) {
+  background: var(--accent-bg);
+  color: var(--text);
+}
+
+.tt-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.tt-btn:disabled {
+  color: var(--muted-2);
+  cursor: not-allowed;
+}
+
+.tt-icon {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.tt-label {
+  font-size: 9px;
+  letter-spacing: 0.02em;
+}
+
+
 .header-actions button {
   background: var(--panel-raised);
   border: 1px solid var(--border);
@@ -199,6 +249,16 @@ button.chip.active {
   border-color: var(--accent, #b3541e);
 }
 
+.chip-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+}
+
 .field {
   display: flex;
   flex-direction: column;
@@ -242,6 +302,10 @@ button.chip.active {
 .issues {
   margin: 0;
   padding-left: 18px;
+  color: var(--danger-text);
+}
+
+.issues-inline {
   color: var(--danger-text);
 }
 
@@ -626,21 +690,6 @@ button.chip.active {
   z-index: 30;
 }
 
-.tool-rail {
-  position: absolute;
-  left: 12px;
-  top: 320px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  background: rgba(255, 255, 255, 0.94);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 4px;
-  box-shadow: 0 4px 16px rgba(20, 30, 40, 0.14);
-  z-index: 30;
-}
-
 .rail-btn {
   display: flex;
   flex-direction: column;
@@ -654,11 +703,6 @@ button.chip.active {
   color: var(--muted);
   cursor: pointer;
   font: inherit;
-}
-
-.tool-rail .rail-btn {
-  width: 36px;
-  padding: 6px 2px;
 }
 
 .rail-btn:hover {
