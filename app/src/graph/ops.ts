@@ -14,6 +14,23 @@ import {
 
 export const EMPTY_GRAPH: GraphState = { nodes: {}, edges: {}, nextNodeNum: 1, nextEdgeNum: 1 };
 
+export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
+
+/** Bounding box over every edge vertex (not just nodes — curved edges bulge
+ *  past their endpoints). Falls back to nodes for edge-less graphs. */
+export function graphBounds(g: GraphState): Bounds | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const take = (x: number, y: number) => {
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  };
+  for (const e of Object.values(g.edges)) {
+    for (let i = 0; i + 1 < e.points.length; i += 2) take(e.points[i], e.points[i + 1]);
+  }
+  for (const n of Object.values(g.nodes)) take(n.x, n.y);
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
+
 function clone(g: GraphState): GraphState {
   return { ...g, nodes: { ...g.nodes }, edges: { ...g.edges } };
 }
@@ -170,12 +187,24 @@ export function removeEdgeVertex(g0: GraphState, edgeId: string, idx: number): G
  * Remove a degree-2 node by joining its two edges into one straight-through
  * edge (the bend disappears). Returns null when the node isn't healable.
  */
-export function joinThroughNode(g0: GraphState, nodeId: string): GraphState | null {
+export interface JoinResult {
+  g: GraphState;
+  keptId: string;   // surviving edge id (was e1)
+  dropId: string;   // removed edge id
+  len1: number;     // length of e1 before the join
+  len2: number;
+  e1Reversed: boolean; // e1 was flipped to end at the node
+  e2Reversed: boolean;
+}
+
+export function joinThroughNode(g0: GraphState, nodeId: string): JoinResult | null {
   const around = edgesAt(g0, nodeId);
   if (around.length !== 2 || around[0].id === around[1].id) return null;
   const [e1, e2] = around;
+  // A self-loop at the node would leave the joined edge referencing the
+  // deleted node — not healable.
+  if (e1.a === e1.b || e2.a === e2.b) return null;
   const otherEnd = (e: StreetEdge) => (e.a === nodeId ? e.b : e.a);
-  if (otherEnd(e1) === otherEnd(e2) && otherEnd(e1) === nodeId) return null;
 
   // e1 oriented to END at the node, e2 to START at it.
   const p1 = e1.b === nodeId ? e1.points : reverseFlat(e1.points);
@@ -196,7 +225,15 @@ export function joinThroughNode(g0: GraphState, nodeId: string): GraphState | nu
   delete g.edges[e2.id];
   g.edges[e1.id] = joined;
   delete g.nodes[nodeId];
-  return g;
+  return {
+    g,
+    keptId: e1.id,
+    dropId: e2.id,
+    len1: polylineLength(e1.points),
+    len2: polylineLength(e2.points),
+    e1Reversed,
+    e2Reversed,
+  };
 }
 
 function reverseFlat(flat: number[]): number[] {

@@ -4,7 +4,6 @@ import { polylineLength } from '../geometry/polyline';
 import { validateGraph } from '../graph/validate';
 
 export function NetworkPanel() {
-  const tool = useCst((s) => s.tool);
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
@@ -14,7 +13,6 @@ export function NetworkPanel() {
   const dcCandidates = useCst((s) => s.dcCandidates);
   const statusMsg = useCst((s) => s.statusMsg);
   const importBusy = useCst((s) => s.importBusy);
-  const setTool = useCst((s) => s.setTool);
   const selectEdge = useCst((s) => s.selectEdge);
   const simplifyAll = useCst((s) => s.simplifyAll);
   const cleanNetwork = useCst((s) => s.cleanNetwork);
@@ -44,18 +42,6 @@ export function NetworkPanel() {
   return (
     <div className="panel">
       <h2>Network</h2>
-
-      <div className="tool-row">
-        <button className={tool === 'select' ? 'active' : ''} onClick={() => setTool('select')}>
-          Select
-        </button>
-        <button className={tool === 'draw' ? 'active' : ''} onClick={() => setTool('draw')}>
-          Draw
-        </button>
-        <button className={tool === 'split' ? 'active' : ''} onClick={() => setTool('split')}>
-          Split
-        </button>
-      </div>
 
       <h3>Import OSM</h3>
       <div className="field-row">

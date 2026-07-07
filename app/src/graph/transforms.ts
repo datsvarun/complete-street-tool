@@ -64,6 +64,8 @@ export function collapseDegenerateNodes(g0: GraphState): { g: GraphState; collap
       const around = edgesAt(g, node.id);
       if (around.length !== 2) continue;
       const [x, y] = around;
+      // A self-loop would leave the spliced edge referencing the deleted node.
+      if (x.a === x.b || y.a === y.b) continue;
       let e1 = x, e2 = y;
       if (!canJoin(e1, e2, node.id)) {
         [e1, e2] = [y, x];

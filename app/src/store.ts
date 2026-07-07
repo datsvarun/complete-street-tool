@@ -11,16 +11,19 @@ import type {
   SectionComponent,
   SelectMode,
   Stage,
+  StreetEdge,
   StreetElement,
   Tool,
 } from './types';
-import { DEFAULT_WIDTH, resolveDrop, suggestElements } from './detailing/elements';
-import { deriveNodeArtifacts } from './graph/junctions';
+import { DEFAULT_WIDTH, pruneElements, resolveDrop, suggestElements } from './detailing/elements';
+import { projectOnPolyline } from './geometry/polyline';
+import { deriveNodeArtifactsCached } from './graph/junctions';
 import {
   commitDraft,
   deleteEdge,
   deleteNode,
   EMPTY_GRAPH,
+  graphBounds,
   joinThroughNode,
   mergeNodes,
   moveEdgeVertex,
@@ -118,6 +121,9 @@ interface CstState extends GraphState {
   clearSuggestions: () => void;
   setEdgeLanes: (edgeId: string, lanes: number) => void;
   selectJunction: (key: string | null) => void;
+  undo: () => void;
+  redo: () => void;
+  pruneSelections: () => void;
   setJunctionType: (jKey: string, type: JunctionType) => void;
   setCornerRadius: (jKey: string, cornerKey: string, radiusM: number | null) => void;
   toggleCornerChamfer: (jKey: string, cornerKey: string) => void;
@@ -132,17 +138,40 @@ const EMPTY_DESIGN: JunctionDesign = {
   touched: false,
 };
 
-function graphBounds(g: GraphState): Bounds | null {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of Object.values(g.nodes)) {
-    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
-    maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y);
-  }
-  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
-}
-
 function pickGraph(s: CstState): GraphState {
   return { nodes: s.nodes, edges: s.edges, nextNodeNum: s.nextNodeNum, nextEdgeNum: s.nextEdgeNum };
+}
+
+/** Re-anchor elements after `oldEdge` was split at `nodeId` into two new edges. */
+function reanchorAfterSplit(
+  elements: CstState['elements'],
+  oldEdge: StreetEdge,
+  g: GraphState,
+  nodeId: string,
+): CstState['elements'] {
+  const n = g.nodes[nodeId];
+  if (!n) return elements;
+  const halves = Object.values(g.edges).filter(
+    (e) => (e.a === oldEdge.a && e.b === nodeId) || (e.a === nodeId && e.b === oldEdge.b),
+  );
+  const first = halves.find((e) => e.a === oldEdge.a && e.b === nodeId);
+  const second = halves.find((e) => e.a === nodeId && e.b === oldEdge.b);
+  if (!first || !second) return elements;
+  const splitStation = projectOnPolyline(oldEdge.points, n.x, n.y)?.station ?? 0;
+  const out: CstState['elements'] = {};
+  let changed = false;
+  for (const [id, el] of Object.entries(elements)) {
+    if (el.edgeId !== oldEdge.id) {
+      out[id] = el;
+      continue;
+    }
+    changed = true;
+    out[id] =
+      el.stationM <= splitStation
+        ? { ...el, edgeId: first.id }
+        : { ...el, edgeId: second.id, stationM: el.stationM - splitStation };
+  }
+  return changed ? out : elements;
 }
 
 export const useCst = create<CstState>()(
@@ -249,6 +278,7 @@ export const useCst = create<CstState>()(
           for (const id of ids) g = deleteEdge(g, id);
           return {
             ...g,
+            elements: pruneElements(g, s.elements),
             dcCandidates: null,
             highlightEdges: [],
             selectedEdgeId: null,
@@ -269,12 +299,21 @@ export const useCst = create<CstState>()(
           const e = s.edges[edgeId];
           if (!e?.section) return {};
           const total = e.section.components.reduce((sum, c) => sum + c.widthM, 0);
+          const last = e.section.components.length - 1;
           const section = {
             ...e.section,
             components: [...e.section.components].reverse(),
             refM: total - (e.section.refM ?? total / 2),
           };
-          return { edges: { ...s.edges, [edgeId]: { ...e, section } }, statusMsg: 'section flipped' };
+          // Elements anchored to this edge mirror with it (compIndex + fraction).
+          const elements = Object.fromEntries(
+            Object.entries(s.elements).map(([id, el]) =>
+              el.edgeId === edgeId && el.compIndex >= 0
+                ? [id, { ...el, compIndex: last - el.compIndex, t: 1 - el.t }]
+                : [id, el],
+            ),
+          );
+          return { edges: { ...s.edges, [edgeId]: { ...e, section } }, elements, statusMsg: 'section flipped' };
         }),
 
       mergeSelectedAsDc: () =>
@@ -367,12 +406,43 @@ export const useCst = create<CstState>()(
           );
           if (deg === 2) {
             const healed = joinThroughNode(g, nodeId);
-            if (healed) return { ...healed, dcCandidates: null, statusMsg: `${nodeId} removed — streets joined` };
+            if (healed) {
+              // Elements follow the join: the kept edge may be reversed, the
+              // dropped edge's stations shift past the kept edge's length.
+              const { keptId, dropId, len1, len2, e1Reversed, e2Reversed } = healed;
+              const kept = healed.g.edges[keptId];
+              const lastComp = (kept.section?.components.length ?? 0) - 1;
+              const mirror = (el: StreetElement) =>
+                el.compIndex >= 0 && lastComp >= 0
+                  ? { compIndex: lastComp - el.compIndex, t: 1 - el.t }
+                  : {};
+              const elements = Object.fromEntries(
+                Object.entries(s.elements).map(([id, el]) => {
+                  if (el.edgeId === keptId) {
+                    return e1Reversed
+                      ? [id, { ...el, stationM: len1 - el.stationM, ...mirror(el) }]
+                      : [id, el];
+                  }
+                  if (el.edgeId === dropId) {
+                    const stat = e2Reversed ? len2 - el.stationM : el.stationM;
+                    return [
+                      id,
+                      { ...el, edgeId: keptId, stationM: len1 + stat, ...(e2Reversed ? mirror(el) : {}) },
+                    ];
+                  }
+                  return [id, el];
+                }),
+              );
+              return { ...healed.g, elements, dcCandidates: null, statusMsg: `${nodeId} removed — streets joined` };
+            }
           }
+          const gDel = deleteNode(g, nodeId);
           return {
-            ...deleteNode(g, nodeId),
+            ...gDel,
+            elements: pruneElements(gDel, s.elements),
             dcCandidates: null,
             selectedEdgeId: null,
+            selectedEdgeIds: [],
             statusMsg: deg >= 3 ? `${nodeId} and its ${deg} streets removed — redraw as needed` : `${nodeId} removed`,
           };
         }),
@@ -386,16 +456,29 @@ export const useCst = create<CstState>()(
       // (one undoable step). The dragged node's streets rewire to the split point.
       weldNodeToEdge: (nodeId, edgeId, x, y) =>
         set((s) => {
+          const oldEdge = s.edges[edgeId];
           const res = splitEdge(pickGraph(s), edgeId, x, y);
           if (!res.nodeId || res.nodeId === nodeId) return {};
+          const elements = reanchorAfterSplit(s.elements, oldEdge, res.g, res.nodeId);
           const g = mergeNodes(res.g, res.nodeId, nodeId);
-          return { ...g, dcCandidates: null, statusMsg: `${nodeId} welded into ${edgeId} at ${res.nodeId}` };
+          return {
+            ...g,
+            elements: pruneElements(g, elements),
+            dcCandidates: null,
+            statusMsg: `${nodeId} welded into ${edgeId} at ${res.nodeId}`,
+          };
         }),
 
       splitEdgeAt: (edgeId, x, y) =>
         set((s) => {
+          const oldEdge = s.edges[edgeId];
           const res = splitEdge(pickGraph(s), edgeId, x, y);
-          return res.nodeId ? { ...res.g, statusMsg: `split at ${res.nodeId}` } : {};
+          if (!res.nodeId) return {};
+          return {
+            ...res.g,
+            elements: reanchorAfterSplit(s.elements, oldEdge, res.g, res.nodeId),
+            statusMsg: `split at ${res.nodeId}`,
+          };
         }),
 
       simplifyAll: (tolM) =>
@@ -407,7 +490,7 @@ export const useCst = create<CstState>()(
       cleanNetwork: () =>
         set((s) => {
           const { g, summary } = runStandardPipeline(pickGraph(s));
-          return { ...g, dcCandidates: null, statusMsg: summary };
+          return { ...g, elements: pruneElements(g, s.elements), dcCandidates: null, statusMsg: summary };
         }),
 
       importOsm: async (lat, lon, radiusM) => {
@@ -421,6 +504,14 @@ export const useCst = create<CstState>()(
             origin: { lat, lon },
             importBusy: false,
             selectedEdgeId: null,
+            selectedEdgeIds: [],
+            selectedElementId: null,
+            selectedJunctionKey: null,
+            placeKind: null,
+            elements: {},
+            nextElementNum: 1,
+            junctionDesigns: {},
+            reviewList: [],
             dcCandidates: null,
             highlightEdges: [],
             pendingFit: graphBounds(cleaned.g),
@@ -441,6 +532,14 @@ export const useCst = create<CstState>()(
           origin: { lat: DEFAULT_IMPORT.lat, lon: DEFAULT_IMPORT.lon },
           importBusy: false,
           selectedEdgeId: null,
+          selectedEdgeIds: [],
+          selectedElementId: null,
+          selectedJunctionKey: null,
+          placeKind: null,
+          elements: {},
+          nextElementNum: 1,
+          junctionDesigns: {},
+          reviewList: [],
           dcCandidates: null,
           highlightEdges: [],
           pendingFit: graphBounds(cleaned.g),
@@ -458,12 +557,16 @@ export const useCst = create<CstState>()(
         }),
 
       applyDcMerge: (c) =>
-        set((s) => ({
-          ...mergeDualCarriageway(pickGraph(s), c),
-          dcCandidates: (s.dcCandidates ?? []).filter((x) => x !== c),
-          highlightEdges: [],
-          statusMsg: `Merged ${c.e1} + ${c.e2} into a divided carriageway`,
-        })),
+        set((s) => {
+          const g = mergeDualCarriageway(pickGraph(s), c);
+          return {
+            ...g,
+            elements: pruneElements(g, s.elements),
+            dcCandidates: (s.dcCandidates ?? []).filter((x) => x !== c),
+            highlightEdges: [],
+            statusMsg: `Merged ${c.e1} + ${c.e2} into a divided carriageway`,
+          };
+        }),
 
       setHighlight: (ids) => set({ highlightEdges: ids }),
 
@@ -549,7 +652,7 @@ export const useCst = create<CstState>()(
 
       suggest: (kind) =>
         set((s) => {
-          const { trims } = deriveNodeArtifacts(pickGraph(s), s.junctionDesigns);
+          const { trims } = deriveNodeArtifactsCached(pickGraph(s), s.junctionDesigns);
           const created = suggestElements(pickGraph(s), kind, Object.values(s.elements), trims);
           if (created.length === 0) return { statusMsg: `no eligible belts for ${kind} suggestions` };
           const elements = { ...s.elements };
@@ -587,6 +690,33 @@ export const useCst = create<CstState>()(
         }),
 
       selectJunction: (key) => set({ selectedJunctionKey: key }),
+
+      // Undo/redo restore the graph slice only; volatile selections must be
+      // re-validated against the restored records or they dangle (§7 of
+      // ARCHITECTURE.md). Always undo through these, never temporal directly.
+      undo: () => {
+        useCst.temporal.getState().undo();
+        get().pruneSelections();
+      },
+
+      redo: () => {
+        useCst.temporal.getState().redo();
+        get().pruneSelections();
+      },
+
+      pruneSelections: () =>
+        set((s) => {
+          const ids = s.selectedEdgeIds.filter((id) => s.edges[id]);
+          const junctionAlive =
+            s.selectedJunctionKey?.split('+').every((nid) => s.nodes[nid]) ?? false;
+          return {
+            selectedEdgeIds: ids,
+            selectedEdgeId: s.selectedEdgeId && s.edges[s.selectedEdgeId] ? s.selectedEdgeId : ids[ids.length - 1] ?? null,
+            selectedElementId:
+              s.selectedElementId && s.elements[s.selectedElementId] ? s.selectedElementId : null,
+            selectedJunctionKey: junctionAlive ? s.selectedJunctionKey : null,
+          };
+        }),
 
       setJunctionType: (jKey, type) =>
         set((s) => ({

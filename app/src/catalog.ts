@@ -24,6 +24,13 @@ export function classifyElement(element: string): ComponentKind {
   return 'other';
 }
 
+/** Components flush with the carriageway (parking is at-grade in Indian
+ *  practice). Defines the curb line for junction geometry AND element
+ *  placement — one set so they can never disagree. */
+export const DRIVABLE_KINDS: Set<ComponentKind> = new Set([
+  'carriageway', 'mixed', 'service', 'brt', 'parking',
+]);
+
 export const KIND_COLORS: Record<ComponentKind, string> = {
   carriageway: '#4a5560',
   mixed: '#5d6873',

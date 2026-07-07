@@ -13,7 +13,6 @@
   --danger-text: #a03e39;
   --ok: #2c7c3f;
   --canvas: #f4f2ec;
-  --statusbar-bg: rgba(255, 255, 255, 0.92);
 }
 
 * {
@@ -56,32 +55,6 @@ header {
   font-weight: 400;
 }
 
-.stage-tabs {
-  display: flex;
-  gap: 4px;
-}
-
-.tab {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--muted);
-  padding: 12px 14px;
-  cursor: pointer;
-  font: inherit;
-}
-
-.tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-  font-weight: 600;
-}
-
-.tab:disabled {
-  color: var(--muted-2);
-  cursor: not-allowed;
-}
-
 .header-actions {
   margin-left: auto;
   display: flex;
@@ -107,14 +80,6 @@ main {
   display: flex;
   min-height: 0;
   position: relative;
-}
-
-aside {
-  width: 300px;
-  flex: none;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
 }
 
 .panel {
@@ -392,15 +357,6 @@ button.chip.active {
   bottom: 6px;
 }
 
-.basemap-pick select {
-  background: var(--panel-raised);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text);
-  font: inherit;
-  padding: 1px 4px;
-}
-
 .geocode {
   position: relative;
   display: flex;
@@ -463,26 +419,6 @@ button.chip.active {
   padding: 8px 10px;
   font-size: 12px;
   color: var(--danger-text);
-}
-
-.status-bar {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  gap: 20px;
-  align-items: center;
-  padding: 5px 12px;
-  font-size: 12px;
-  color: var(--text);
-  background: var(--statusbar-bg);
-  border-top: 1px solid var(--border);
-}
-
-.status-bar .hint {
-  margin-left: auto;
-  color: var(--muted);
 }
 
 .strip-editor {

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useCst } from '../store';
-import { buildPlanSvg } from '../export/plan';
+import { esc, framePlanSvg, planContent } from '../export/plan';
 
 const SCALES = [200, 250, 500, 1000, 2000];
 
@@ -14,15 +14,20 @@ export function ExportPanel() {
   const [subtitle, setSubtitle] = useState('IRC SP:118-2018 · complete street plan');
   const [scaleDenom, setScaleDenom] = useState(500);
 
+  // The expensive part (full-network derivation + geometry serialization) only
+  // depends on the design; framing with the title block is cheap per keystroke.
+  const content = useMemo(
+    () => planContent({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns, Object.values(elements)),
+    [nodes, edges, junctionDesigns, elements],
+  );
   const plan = useMemo(
     () =>
-      buildPlanSvg(
-        { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 },
-        junctionDesigns,
-        Object.values(elements),
-        { title, subtitle, scaleDenom, pxPerMm: 4 },
-      ),
-    [nodes, edges, junctionDesigns, elements, title, subtitle, scaleDenom],
+      framePlanSvg({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, content, {
+        title,
+        subtitle,
+        scaleDenom,
+      }),
+    [nodes, edges, content, title, subtitle, scaleDenom],
   );
 
   const hasContent = Object.keys(edges).length > 0;
@@ -32,7 +37,7 @@ export function ExportPanel() {
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(
-      `<!doctype html><html><head><title>${title}</title>` +
+      `<!doctype html><html><head><title>${esc(title)}</title>` +
         `<style>@page{size:auto;margin:8mm} body{margin:0} svg{width:100%;height:auto;display:block}</style>` +
         `</head><body>${plan.svg}` +
         `<script>window.onload=function(){setTimeout(function(){window.print()},250)}</scr` + `ipt>` +
@@ -41,13 +46,13 @@ export function ExportPanel() {
     w.document.close();
   };
 
-  const download = (ext: 'svg') => {
+  const download = () => {
     if (!plan) return;
     const blob = new Blob([plan.svg], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${title.replace(/[^\w]+/g, '_').toLowerCase()}.${ext}`;
+    a.download = `${title.replace(/[^\w]+/g, '_').toLowerCase()}.svg`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -87,7 +92,7 @@ export function ExportPanel() {
         <button className="chip" onClick={printPdf} disabled={!plan}>
           Print / Save PDF
         </button>
-        <button className="chip" onClick={() => download('svg')} disabled={!plan}>
+        <button className="chip" onClick={download} disabled={!plan}>
           Download SVG
         </button>
       </div>

@@ -62,28 +62,23 @@ const tokenW = (t: MatchToken) => t.comps.reduce((s, c) => s + c.widthM, 0);
  *  counts pair off positionally; a multi-carriageway group meeting a single
  *  carriageway splits the single width proportionally so both carriageways
  *  converge while the median pinches out (a Y-merge, not a taper-to-edge). */
+function positionalPair(a: SectionComponent[], b: SectionComponent[]): MatchedComponent[] {
+  const out: MatchedComponent[] = [];
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const c = a[i] ?? b[i];
+    out.push({ element: c.element, kind: c.kind, w1: a[i]?.widthM ?? 0, w2: b[i]?.widthM ?? 0 });
+  }
+  return out;
+}
+
 function expandGroupPair(a: SectionComponent[], b: SectionComponent[]): MatchedComponent[] {
   const nA = a.filter((c) => c.kind === 'carriageway').length;
   const nB = b.filter((c) => c.kind === 'carriageway').length;
-  if (nA === nB) {
-    const out: MatchedComponent[] = [];
-    for (let i = 0; i < Math.max(a.length, b.length); i++) {
-      const c = a[i] ?? b[i];
-      out.push({ element: c.element, kind: c.kind, w1: a[i]?.widthM ?? 0, w2: b[i]?.widthM ?? 0 });
-    }
-    return out;
-  }
+  if (nA === nB) return positionalPair(a, b);
   const manyIsA = nA > nB;
   const [many, few] = manyIsA ? [a, b] : [b, a];
-  if (few.length !== 1) {
-    // multi-vs-multi with different counts — rare; plain positional fallback
-    const out: MatchedComponent[] = [];
-    for (let i = 0; i < Math.max(a.length, b.length); i++) {
-      const c = a[i] ?? b[i];
-      out.push({ element: c.element, kind: c.kind, w1: a[i]?.widthM ?? 0, w2: b[i]?.widthM ?? 0 });
-    }
-    return out;
-  }
+  // multi-vs-multi with different counts — rare; plain positional fallback
+  if (few.length !== 1) return positionalPair(a, b);
   const cwTotal = many.filter((c) => c.kind === 'carriageway').reduce((s, c) => s + c.widthM, 0);
   return many.map((c) => {
     const share = c.kind === 'carriageway' ? few[0].widthM * (c.widthM / cwTotal) : 0;

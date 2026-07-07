@@ -37,15 +37,14 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
       const s = useCst.getState();
-      const t = useCst.temporal.getState();
       const k = e.key.toLowerCase();
       if ((e.ctrlKey || e.metaKey) && k === 'z') {
         e.preventDefault();
-        if (e.shiftKey) t.redo();
-        else t.undo();
+        if (e.shiftKey) s.redo();
+        else s.undo();
       } else if ((e.ctrlKey || e.metaKey) && k === 'y') {
         e.preventDefault();
-        t.redo();
+        s.redo();
       } else if ((e.ctrlKey || e.metaKey) && k === 'a') {
         e.preventDefault();
         s.selectAll();
@@ -99,10 +98,10 @@ export default function App() {
               onChange={(e) => setDesignOpacity(parseInt(e.target.value, 10) / 100)}
             />
           </label>
-          <button onClick={() => useCst.temporal.getState().undo()} title="Undo (Ctrl+Z)">
+          <button onClick={() => useCst.getState().undo()} title="Undo (Ctrl+Z)">
             ↩
           </button>
-          <button onClick={() => useCst.temporal.getState().redo()} title="Redo (Ctrl+Shift+Z)">
+          <button onClick={() => useCst.getState().redo()} title="Redo (Ctrl+Shift+Z)">
             ↪
           </button>
         </div>

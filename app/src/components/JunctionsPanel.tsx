@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useCst } from '../store';
-import { deriveNodeArtifacts } from '../graph/junctions';
+import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { JunctionType } from '../types';
 
 const TURN_LABEL: Record<string, string> = {
@@ -23,7 +23,7 @@ export function JunctionsPanel() {
   const removeJunctionDesign = useCst((s) => s.removeJunctionDesign);
 
   const { junctions, transitions } = useMemo(
-    () => deriveNodeArtifacts({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns),
+    () => deriveNodeArtifactsCached({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns),
     [nodes, edges, junctionDesigns],
   );
   const anySection = Object.values(edges).some((e) => e.section);

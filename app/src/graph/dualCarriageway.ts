@@ -105,6 +105,9 @@ export function mergeDualCarriageway(g0: GraphState, c: DcCandidate): GraphState
   const bKeep = e1.b;
   const aDrop = antiParallel ? e2.b : e2.a;
   const bDrop = antiParallel ? e2.a : e2.b;
+  // Edges sharing an endpoint are consecutive, not side-by-side — merging
+  // would collapse a keep-node and leave the new edge dangling.
+  if (aKeep === bKeep || aDrop === bKeep || bDrop === aKeep) return g0;
 
   let g = deleteEdge(g0, e1.id);
   g = deleteEdge(g, e2.id);

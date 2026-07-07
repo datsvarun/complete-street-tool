@@ -13,10 +13,20 @@ import { nodeClassOf } from '../types';
 import type { GraphNode, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { elementGraphics, laneDividers } from '../detailing/elements';
 import { degree } from '../graph/ops';
-import { deriveNodeArtifacts } from '../graph/junctions';
-import type { EdgeTrim, JunctionPoly } from '../graph/junctions';
+import { deriveNodeArtifactsCached } from '../graph/junctions';
+import type { EdgeTrim, JunctionPoly, NodeArtifacts } from '../graph/junctions';
 
 Konva.dragDistance = 3; // don't treat a pan drag as a click
+
+/** Pointer position in world metres — the ONE screen→world conversion. */
+function stageToWorld(stageNode: Konva.Stage): { x: number; y: number } | null {
+  const pos = stageNode.getPointerPosition();
+  if (!pos) return null;
+  return {
+    x: (pos.x - stageNode.x()) / stageNode.scaleX(),
+    y: (pos.y - stageNode.y()) / stageNode.scaleY(),
+  };
+}
 
 interface View {
   x: number;
@@ -135,17 +145,12 @@ function EdgeShape({
     // Detailing: a click on the ribbon should place/select an element, not fall
     // through to edge selection — the band would otherwise eat the placement.
     if (st.stage === 'detailing') {
+      e.cancelBubble = true;
       const stageNode = e.target.getStage()!;
-      const pos = stageNode.getPointerPosition()!;
-      const wx = (pos.x - stageNode.x()) / stageNode.scaleX();
-      const wy = (pos.y - stageNode.y()) / stageNode.scaleY();
-      if (st.placeKind) {
-        e.cancelBubble = true;
-        st.placeElementAt(wx, wy, 40 / stageNode.scaleX());
-      } else {
-        e.cancelBubble = true;
-        selectEdge(edge.id);
-      }
+      const w = stageToWorld(stageNode);
+      if (!w) return;
+      if (st.placeKind) st.placeElementAt(w.x, w.y, 40 / stageNode.scaleX());
+      else selectEdge(edge.id, e.evt.shiftKey ? 'add' : e.evt.ctrlKey || e.evt.metaKey ? 'toggle' : 'replace');
       return;
     }
     if (tool === 'select') {
@@ -154,10 +159,8 @@ function EdgeShape({
     } else if (tool === 'split') {
       e.cancelBubble = true;
       const stageNode = e.target.getStage()!;
-      const pos = stageNode.getPointerPosition()!;
-      const wx = (pos.x - stageNode.x()) / stageNode.scaleX();
-      const wy = (pos.y - stageNode.y()) / stageNode.scaleY();
-      splitEdgeAt(edge.id, wx, wy);
+      const w = stageToWorld(stageNode);
+      if (w) splitEdgeAt(edge.id, w.x, w.y);
     }
   };
   const s = edgeStroke(edge, selected, highlighted, showSections && !!section);
@@ -419,6 +422,83 @@ function findSnap(
   return best;
 }
 
+/** One street element: memo'd so dragging one element (or changing the
+ *  selection) doesn't recompute graphics for the other thousand. */
+function ElementShapeImpl({
+  el,
+  edge,
+  interactive,
+  selected,
+  scale,
+}: {
+  el: StreetElement;
+  edge: StreetEdge;
+  interactive: boolean;
+  selected: boolean;
+  scale: number;
+}) {
+  const moveElement = useCst((s) => s.moveElement);
+  const removeElement = useCst((s) => s.removeElement);
+  const selectElement = useCst((s) => s.selectElement);
+  const gfx = useMemo(() => elementGraphics(edge, el), [edge, el]);
+  if (gfx.length === 0) return null;
+  return (
+    <Group
+      draggable={interactive}
+      {...(interactive ? hoverCursor('move') : {})}
+      opacity={el.placedBy === 'suggest' ? 0.75 : 1}
+      onClick={(ev) => {
+        if (!interactive) return;
+        ev.cancelBubble = true;
+        selectElement(el.id);
+      }}
+      onDragStart={() => useCst.temporal.getState().pause()}
+      onDragMove={(ev) => {
+        const w = stageToWorld(ev.target.getStage()!);
+        if (!w) return;
+        moveElement(el.id, w.x, w.y, 40);
+        ev.target.position({ x: 0, y: 0 });
+      }}
+      onDragEnd={(ev) => {
+        useCst.temporal.getState().resume();
+        ev.target.position({ x: 0, y: 0 });
+      }}
+      onContextMenu={(ev) => {
+        ev.evt.preventDefault();
+        ev.cancelBubble = true;
+        removeElement(el.id);
+      }}
+    >
+      {selected && gfx[0] && (
+        <Circle
+          x={gfx[0].shape === 'circle' ? gfx[0].x : gfx[0].pts![0]}
+          y={gfx[0].shape === 'circle' ? gfx[0].y : gfx[0].pts![1]}
+          radius={8 / scale}
+          stroke="#e08e45"
+          strokeWidth={1.5}
+          strokeScaleEnabled={false}
+        />
+      )}
+      {gfx.map((g, gi) =>
+        g.shape === 'circle' ? (
+          <Circle key={gi} x={g.x} y={g.y} radius={g.r} fill={g.fill} stroke={g.stroke} strokeWidth={g.strokeWidth} />
+        ) : (
+          <Line
+            key={gi}
+            points={g.pts}
+            closed={g.closed}
+            fill={g.fill}
+            stroke={g.stroke}
+            strokeWidth={g.strokeWidth ?? 0}
+            dash={g.dash}
+          />
+        ),
+      )}
+    </Group>
+  );
+}
+const ElementShape = memo(ElementShapeImpl);
+
 /** Stage 3 elements: parametric symbols that drag along/across their edge but
  *  stay inside the component kinds their element type allows. */
 function DetailingLayerImpl({
@@ -436,11 +516,6 @@ function DetailingLayerImpl({
   scale: number;
   selectedElementId: string | null;
 }) {
-  const moveElement = useCst((s) => s.moveElement);
-  const removeElement = useCst((s) => s.removeElement);
-  const selectElement = useCst((s) => s.selectElement);
-  const tol = 40;
-
   const dividers = useMemo(
     () =>
       Object.values(edges).flatMap((e) =>
@@ -465,82 +540,98 @@ function DetailingLayerImpl({
       {elements.map((el) => {
         const edge = edges[el.edgeId];
         if (!edge) return null;
-        const gfx = elementGraphics(edge, el);
-        if (gfx.length === 0) return null;
         return (
-          <Group
+          <ElementShape
             key={el.id}
-            draggable={interactive}
-            {...(interactive ? hoverCursor('move') : {})}
-            opacity={el.placedBy === 'suggest' ? 0.75 : 1}
-            onClick={(ev) => {
-              if (!interactive) return;
-              ev.cancelBubble = true;
-              selectElement(el.id);
-            }}
-            onDragStart={() => useCst.temporal.getState().pause()}
-            onDragMove={(ev) => {
-              const stageNode = ev.target.getStage()!;
-              const pos = stageNode.getPointerPosition();
-              if (!pos) return;
-              moveElement(
-                el.id,
-                (pos.x - stageNode.x()) / stageNode.scaleX(),
-                (pos.y - stageNode.y()) / stageNode.scaleY(),
-                tol,
-              );
-              ev.target.position({ x: 0, y: 0 });
-            }}
-            onDragEnd={(ev) => {
-              useCst.temporal.getState().resume();
-              ev.target.position({ x: 0, y: 0 });
-            }}
-            onContextMenu={(ev) => {
-              ev.evt.preventDefault();
-              ev.cancelBubble = true;
-              removeElement(el.id);
-            }}
-          >
-            {el.id === selectedElementId && gfx[0] && (
-              <Circle
-                x={gfx[0].shape === 'circle' ? gfx[0].x : gfx[0].pts![0]}
-                y={gfx[0].shape === 'circle' ? gfx[0].y : gfx[0].pts![1]}
-                radius={8 / scale}
-                stroke="#e08e45"
-                strokeWidth={1.5}
-                strokeScaleEnabled={false}
-              />
-            )}
-            {gfx.map((g, gi) =>
-              g.shape === 'circle' ? (
-                <Circle
-                  key={gi}
-                  x={g.x}
-                  y={g.y}
-                  radius={g.r}
-                  fill={g.fill}
-                  stroke={g.stroke}
-                  strokeWidth={g.strokeWidth}
-                />
-              ) : (
-                <Line
-                  key={gi}
-                  points={g.pts}
-                  closed={g.closed}
-                  fill={g.fill}
-                  stroke={g.stroke}
-                  strokeWidth={g.strokeWidth ?? 0}
-                  dash={g.dash}
-                />
-              ),
-            )}
-          </Group>
+            el={el}
+            edge={edge}
+            interactive={interactive}
+            selected={el.id === selectedElementId}
+            scale={scale}
+          />
         );
       })}
     </Layer>
   );
 }
 const DetailingLayer = memo(DetailingLayerImpl);
+
+/** Junction surfaces, wedges/noses and node transitions — memo'd so mousemove
+ *  state (cursor coords) doesn't reconcile hundreds of Konva shapes. */
+function ArtifactsLayerImpl({
+  artifacts,
+  stage,
+  selectedJunctionKey,
+  designOpacity,
+  dimOthers,
+}: {
+  artifacts: NodeArtifacts;
+  stage: string;
+  selectedJunctionKey: string | null;
+  designOpacity: number;
+  dimOthers: boolean;
+}) {
+  const selectJunction = useCst((s) => s.selectJunction);
+  const junctionsStage = stage === 'junctions';
+  return (
+    <Layer listening={junctionsStage} opacity={designOpacity}>
+      {artifacts.junctions.flatMap((j) =>
+        j.coverBands.map((b, bi) => (
+          <Line key={`${j.nodeIds[0]}-cover${bi}`} points={b} closed fill="#525e6a" listening={false} />
+        )),
+      )}
+      {artifacts.junctions.map((j) => (
+        <Line
+          key={j.key}
+          points={j.polygon}
+          closed
+          fill="#525e6a"
+          stroke={
+            junctionsStage
+              ? j.key === selectedJunctionKey
+                ? '#e08e45'
+                : 'rgba(224,142,69,0.55)'
+              : 'rgba(30,35,40,0.4)'
+          }
+          strokeWidth={junctionsStage ? (j.key === selectedJunctionKey ? 2 : 1) : 0.6}
+          strokeScaleEnabled={false}
+          opacity={dimOthers && j.key !== selectedJunctionKey ? 0.45 : 1}
+          onClick={junctionsStage ? () => selectJunction(j.key) : undefined}
+          {...(junctionsStage ? hoverCursor('pointer') : {})}
+        />
+      ))}
+      {artifacts.junctions.flatMap((j) =>
+        [...j.wedges, ...j.noses].map((b) => (
+          <Line
+            key={`${j.nodeIds[0]}-${b.key}`}
+            points={b.polygon}
+            closed
+            fill={KIND_COLORS[b.kind]}
+            stroke="rgba(30,35,40,0.3)"
+            strokeWidth={0.5}
+            strokeScaleEnabled={false}
+            listening={false}
+          />
+        )),
+      )}
+      {artifacts.transitions.flatMap((t) =>
+        t.bands.map((b) => (
+          <Line
+            key={`${t.nodeId}-${b.key}`}
+            points={b.polygon}
+            closed
+            fill={KIND_COLORS[b.kind]}
+            stroke="rgba(30,35,40,0.35)"
+            strokeWidth={0.6}
+            strokeScaleEnabled={false}
+            listening={false}
+          />
+        )),
+      )}
+    </Layer>
+  );
+}
+const ArtifactsLayer = memo(ArtifactsLayerImpl);
 
 const TURN_COLORS: Record<string, string> = {
   through: '#4a90d9',
@@ -683,19 +774,21 @@ export function CanvasStage() {
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const nodeList = useMemo(() => Object.values(nodes), [nodes]);
   const elementList = useMemo(() => Object.values(elements), [elements]);
+  // Only the network stage renders nodes — don't pay O(nodes × edges) elsewhere.
   const degrees = useMemo(() => {
     const d: Record<string, number> = {};
+    if (stage !== 'network') return d;
     const g = { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 };
     for (const n of nodeList) d[n.id] = degree(g, n.id);
     return d;
-  }, [nodes, edges, nodeList]);
+  }, [nodes, edges, nodeList, stage]);
 
   // Derived node artifacts (§1.2): junction polygons, node transitions, trims.
   const showSections = stage !== 'network';
   const artifacts = useMemo(
     () =>
       showSections
-        ? deriveNodeArtifacts({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns)
+        ? deriveNodeArtifactsCached({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns)
         : { junctions: [], transitions: [], trims: {} },
     [nodes, edges, showSections, junctionDesigns],
   );
@@ -736,14 +829,7 @@ export function CanvasStage() {
     useCst.setState({ pendingFit: null });
   }, [pendingFit, size]);
 
-  const toWorld = (stageNode: Konva.Stage) => {
-    const pos = stageNode.getPointerPosition();
-    if (!pos) return null;
-    return {
-      x: (pos.x - stageNode.x()) / view.scale,
-      y: (pos.y - stageNode.y()) / view.scale,
-    };
-  };
+  const toWorld = stageToWorld;
 
   const onWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -752,10 +838,8 @@ export function CanvasStage() {
     if (!pos) return;
     const factor = e.evt.deltaY > 0 ? 1 / 1.08 : 1.08;
     const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, view.scale * factor));
-    const world = {
-      x: (pos.x - stageNode.x()) / view.scale,
-      y: (pos.y - stageNode.y()) / view.scale,
-    };
+    const world = stageToWorld(stageNode);
+    if (!world) return;
     setView({ scale, x: pos.x - world.x * scale, y: pos.y - world.y * scale });
   };
 
@@ -885,20 +969,22 @@ export function CanvasStage() {
     if (dist(a.x, a.y, b.x, b.y) * view.scale < 6) finishDraft(1 / view.scale);
   };
 
-  const hint =
-    tool === 'draw'
-      ? 'Click to add points (snaps to nodes/edges · Shift = 15° angles) · double-click or Enter to finish · Esc to cancel'
-      : tool === 'split'
-        ? 'Click a street to insert a node (a node between different sections becomes a transition)'
-        : stage === 'sections'
-          ? 'Click a street to select it, then pick a section from the panel'
-          : stage === 'junctions'
-            ? 'Junction polygons are derived from the graph — pick one from the panel to zoom to it'
-            : stage === 'detailing'
-              ? placeKind
-                ? `Click a street to place a ${placeKind} · drag to move it within its band · right-click to remove`
-                : 'Pick an element from the palette, or drag/right-click existing ones · Esc deselects tool'
-              : 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge';
+  const TOOL_HINTS: Partial<Record<Tool, string>> = {
+    draw: 'Click to add points (snaps to nodes/edges · Shift = 15° angles) · double-click or Enter to finish · Esc to cancel',
+    split: 'Click a street to insert a node (a node between different sections becomes a transition)',
+    marquee: 'Drag a box to select streets · Shift adds · Ctrl toggles · V returns to select',
+    lasso: 'Draw around streets to select them · Shift adds · Ctrl toggles · V returns to select',
+  };
+  const STAGE_HINTS: Record<string, string> = {
+    network: 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge',
+    sections: 'Click a street to select it, then pick a section from the panel',
+    junctions: 'Junction polygons are derived from the graph — pick one from the panel to zoom to it',
+    detailing: placeKind
+      ? `Click a street to place a ${placeKind} · drag to move it within its band · right-click to remove`
+      : 'Pick an element from the palette, or drag/right-click existing ones · Esc deselects tool',
+    export: 'Set up the title block in the panel, then print or download the plan',
+  };
+  const hint = TOOL_HINTS[tool] ?? STAGE_HINTS[stage] ?? '';
 
   const previewPoints =
     tool === 'draw' && draft.length >= 1 && cursor
@@ -960,75 +1046,13 @@ export function CanvasStage() {
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
         {showSections && (
-          <Layer listening={stage === 'junctions'} opacity={designOpacity}>
-            {artifacts.junctions.flatMap((j) =>
-              j.coverBands.map((b, bi) => (
-                <Line key={`${j.nodeIds[0]}-cover${bi}`} points={b} closed fill="#525e6a" listening={false} />
-              )),
-            )}
-            {artifacts.junctions.map((j) => (
-              <Line
-                key={j.key}
-                points={j.polygon}
-                closed
-                fill="#525e6a"
-                stroke={
-                  stage === 'junctions'
-                    ? j.key === selectedJunctionKey
-                      ? '#e08e45'
-                      : 'rgba(224,142,69,0.55)'
-                    : 'rgba(30,35,40,0.4)'
-                }
-                strokeWidth={stage === 'junctions' ? (j.key === selectedJunctionKey ? 2 : 1) : 0.6}
-                strokeScaleEnabled={false}
-                opacity={focusedJunction && j.key !== selectedJunctionKey ? 0.45 : 1}
-                onClick={stage === 'junctions' ? () => selectJunction(j.key) : undefined}
-                {...(stage === 'junctions' ? hoverCursor('pointer') : {})}
-              />
-            ))}
-            {artifacts.junctions.flatMap((j) =>
-              j.wedges.map((b) => (
-                <Line
-                  key={`${j.nodeIds[0]}-${b.key}`}
-                  points={b.polygon}
-                  closed
-                  fill={KIND_COLORS[b.kind]}
-                  stroke="rgba(30,35,40,0.3)"
-                  strokeWidth={0.5}
-                  strokeScaleEnabled={false}
-                  listening={false}
-                />
-              )),
-            )}
-            {artifacts.junctions.flatMap((j) =>
-              j.noses.map((b) => (
-                <Line
-                  key={`${j.nodeIds[0]}-${b.key}`}
-                  points={b.polygon}
-                  closed
-                  fill={KIND_COLORS[b.kind]}
-                  stroke="rgba(30,35,40,0.3)"
-                  strokeWidth={0.5}
-                  strokeScaleEnabled={false}
-                  listening={false}
-                />
-              )),
-            )}
-            {artifacts.transitions.flatMap((t) =>
-              t.bands.map((b) => (
-                <Line
-                  key={`${t.nodeId}-${b.key}`}
-                  points={b.polygon}
-                  closed
-                  fill={KIND_COLORS[b.kind]}
-                  stroke="rgba(30,35,40,0.35)"
-                  strokeWidth={0.6}
-                  strokeScaleEnabled={false}
-                  listening={false}
-                />
-              )),
-            )}
-          </Layer>
+          <ArtifactsLayer
+            artifacts={artifacts}
+            stage={stage}
+            selectedJunctionKey={selectedJunctionKey}
+            designOpacity={designOpacity}
+            dimOthers={!!focusedJunction}
+          />
         )}
         <EdgesLayer
           edges={edgeList}

@@ -4,17 +4,11 @@
 import type { GraphState, JunctionDesign, StreetElement } from '../types';
 import { KIND_COLORS } from '../catalog';
 import { buildEdgeGeometry } from '../sections/transition';
-import { deriveNodeArtifacts } from '../graph/junctions';
+import { deriveNodeArtifactsCached } from '../graph/junctions';
 import { elementGraphics, laneDividers } from '../detailing/elements';
+import { graphBounds } from '../graph/ops';
 
-export interface PlanBounds {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
-
-function esc(s: string): string {
+export function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
@@ -32,22 +26,13 @@ function pline(pts: number[], stroke: string, sw: number, dash?: number[]): stri
   return `<polyline points="${d}" fill="none" stroke="${stroke}" stroke-width="${sw}"${dashAttr}/>`;
 }
 
-export function graphBounds(g: GraphState): PlanBounds | null {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const n of Object.values(g.nodes)) {
-    minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
-    maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y);
-  }
-  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
-}
-
 /** The design as an SVG group (world metres, y-down). No <svg> wrapper. */
 export function planContent(
   g: GraphState,
   designs: Record<string, JunctionDesign>,
   elements: StreetElement[],
 ): string {
-  const { junctions, transitions, trims } = deriveNodeArtifacts(g, designs);
+  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs);
   const out: string[] = [];
 
   // 1. carriageway surface + wedges + noses (junctions under ribbons)
@@ -102,7 +87,6 @@ export interface PlanOptions {
   title: string;
   subtitle: string;
   scaleDenom: number; // 1:scaleDenom (e.g. 500)
-  pxPerMm: number;    // rendering density
 }
 
 /** Full standalone SVG string: framed plan with title block, legend, scale bar. */
@@ -110,6 +94,15 @@ export function buildPlanSvg(
   g: GraphState,
   designs: Record<string, JunctionDesign>,
   elements: StreetElement[],
+  opts: PlanOptions,
+): { svg: string; widthMm: number; heightMm: number } | null {
+  return framePlanSvg(g, planContent(g, designs, elements), opts);
+}
+
+/** Frame precomputed plan content — cheap, safe to re-run per title keystroke. */
+export function framePlanSvg(
+  g: GraphState,
+  content: string,
   opts: PlanOptions,
 ): { svg: string; widthMm: number; heightMm: number } | null {
   const b = graphBounds(g);
@@ -125,8 +118,6 @@ export function buildPlanSvg(
   const padMm = 10;
   const pageW = planWmm + padMm * 2;
   const pageH = planHmm + padMm * 2 + titleBlockMm;
-
-  const content = planContent(g, designs, elements);
 
   // Transform: place plan world into a padMm-inset box, scaled by mmPerM.
   const tx = padMm - (b.minX - marginM) * mmPerM;

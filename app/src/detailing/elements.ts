@@ -13,9 +13,10 @@ import type {
   StreetElement,
 } from '../types';
 import { refFraction } from '../geometry/ribbon';
+import { DRIVABLE_KINDS } from '../catalog';
 import { pointAtStation, polylineLength, projectOnPolyline, subPolyline, offsetPolyline, toPts, toFlat } from '../geometry/polyline';
 
-const DRIVABLE = new Set<ComponentKind>(['carriageway', 'mixed', 'service', 'brt', 'parking']);
+const DRIVABLE = DRIVABLE_KINDS;
 
 /** Component kinds each element may occupy (the movement constraint). */
 export const ALLOWED: Record<ElementKind, ComponentKind[] | 'drivable' | 'raised-side'> = {
@@ -194,7 +195,9 @@ function frameRect(edge: StreetEdge, station: number, off: number, h: number, w:
 }
 
 export function elementGraphics(edge: StreetEdge, el: StreetElement): Graphic[] {
-  if (!edge.section) return [];
+  // Stale anchors (component deleted, section removed) render nothing rather
+  // than falling back to the centerline; the store prunes them on mutation.
+  if (!edge.section || !isElementValid(edge, el)) return [];
   const L = polylineLength(edge.points);
   const s = Math.min(Math.max(el.stationM, 0.3), L - 0.3);
 
@@ -373,10 +376,23 @@ export function suggestElements(
   return out;
 }
 
-/** Elements whose anchor no longer exists (edge deleted, component gone). */
-export function isElementValid(g: GraphState, el: StreetElement): boolean {
-  const e = g.edges[el.edgeId];
-  if (!e?.section) return false;
-  if (el.kind === 'zebra' || el.kind === 'raisedcrossing') return !!drivableSpan(e.section);
-  return el.compIndex >= 0 && el.compIndex < e.section.components.length;
+/** Whether an element's anchor still exists (edge present, component in range). */
+export function isElementValid(edge: StreetEdge | undefined, el: StreetElement): boolean {
+  if (!edge?.section) return false;
+  if (el.kind === 'zebra' || el.kind === 'raisedcrossing') return !!drivableSpan(edge.section);
+  return el.compIndex >= 0 && el.compIndex < edge.section.components.length;
+}
+
+/** Drop elements whose anchors a graph mutation invalidated. */
+export function pruneElements(
+  g: GraphState,
+  elements: Record<string, StreetElement>,
+): Record<string, StreetElement> {
+  let changed = false;
+  const out: Record<string, StreetElement> = {};
+  for (const [id, el] of Object.entries(elements)) {
+    if (isElementValid(g.edges[el.edgeId], el)) out[id] = el;
+    else changed = true;
+  }
+  return changed ? out : elements;
 }

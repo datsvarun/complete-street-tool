@@ -36,6 +36,7 @@ import {
   sampleTransitionBands,
   transitionLength,
 } from '../sections/transition';
+import { DRIVABLE_KINDS } from '../catalog';
 
 const FALLBACK_WIDTH_M = 7; // approaches without a section still shape the junction
 const MIN_TRIM_M = 1;
@@ -67,9 +68,9 @@ function defaultRadius(a?: string, b?: string): number {
   return hit?.r ?? 6;
 }
 
-// Components flush with the carriageway (parking is at-grade in Indian practice);
-// everything else is a raised component that wraps corners as a wedge.
-const DRIVABLE = new Set(['carriageway', 'mixed', 'service', 'brt', 'parking']);
+// Flush-vs-raised split comes from the shared catalog set so junction curbs
+// and element placement can never disagree.
+const DRIVABLE = DRIVABLE_KINDS;
 
 /** Corner handle metadata: identity + where to draw/drag it. */
 export interface CornerInfo {
@@ -445,11 +446,14 @@ function computeJunction(
   // unless the user pinned this mouth explicitly.
   const trims: number[] = approaches.map((a, i) => {
     const maxTrim = a.len * MAX_TANGENT_FRACTION;
-    const ovTrim = design?.approachOverrides[approachKey(a)]?.trimM;
-    if (ovTrim !== undefined) return Math.min(Math.max(0.5, ovTrim), maxTrim);
     const demandL = corners[(i - 1 + k) % k].clB; // corner on my left curb
     const demandR = corners[i].clA;               // corner on my right curb
-    return Math.min(Math.max(MIN_TRIM_M, demandL, demandR), maxTrim);
+    const floor = Math.max(MIN_TRIM_M, demandL, demandR);
+    const ovTrim = design?.approachOverrides[approachKey(a)]?.trimM;
+    // An override can extend the mouth but never pull it inside the fillet
+    // region — the surface ring would grow a tongue over the approach ribbon.
+    const t = ovTrim !== undefined ? Math.max(ovTrim, floor) : floor;
+    return Math.min(t, maxTrim);
   });
 
   // Surface ring: mouth caps at curb offsets + curb segments + fillet arcs.
@@ -689,6 +693,32 @@ function transitionForNode(
   };
 }
 
+// Single-entry cache: canvas, panels, suggestions and export all derive from
+// the same (nodes, edges, designs) identities — one derivation per state change.
+let lastDerive: {
+  nodes: GraphState['nodes'];
+  edges: GraphState['edges'];
+  designs: Record<string, JunctionDesign> | undefined;
+  result: NodeArtifacts;
+} | null = null;
+
+export function deriveNodeArtifactsCached(
+  g: GraphState,
+  designs?: Record<string, JunctionDesign>,
+): NodeArtifacts {
+  if (
+    lastDerive &&
+    lastDerive.nodes === g.nodes &&
+    lastDerive.edges === g.edges &&
+    lastDerive.designs === designs
+  ) {
+    return lastDerive.result;
+  }
+  const result = deriveNodeArtifacts(g, designs);
+  lastDerive = { nodes: g.nodes, edges: g.edges, designs, result };
+  return result;
+}
+
 /** One pass over all nodes → junction polygons (merged where colliding), node transitions, edge trims. */
 export function deriveNodeArtifacts(
   g: GraphState,
@@ -707,10 +737,14 @@ export function deriveNodeArtifacts(
   const junctionNodes = [...byNode.entries()].filter(([, es]) => es.length >= 3).map(([id]) => id);
   const isJunction = new Set(junctionNodes);
 
-  // Pass 1: singleton trims decide which shared edges are consumed.
+  // Pass 1: singleton results decide which shared edges are consumed AND are
+  // reused verbatim for singleton clusters in pass 2 (a singleton's design
+  // key is its node id, so overrides participate in the merge decision too).
   const singleTrim = new Map<string, number>();
+  const singleRes = new Map<string, ClusterResult | null>();
   for (const nid of junctionNodes) {
-    const res = computeJunction(g, [nid], byNode.get(nid)!);
+    const res = computeJunction(g, [nid], byNode.get(nid)!, designs?.[nid]);
+    singleRes.set(nid, res);
     res?.trims.forEach((t) => singleTrim.set(`${t.edgeId}:${t.end}`, t.trim));
   }
 
@@ -743,9 +777,14 @@ export function deriveNodeArtifacts(
   };
 
   for (const nodeIds of clusters.values()) {
-    const edgeSet = new Map<string, StreetEdge>();
-    for (const nid of nodeIds) for (const e of byNode.get(nid)!) edgeSet.set(e.id, e);
-    const res = computeJunction(g, nodeIds, [...edgeSet.values()], designs?.[[...nodeIds].sort().join('+')]);
+    let res: ClusterResult | null;
+    if (nodeIds.length === 1) {
+      res = singleRes.get(nodeIds[0]) ?? null;
+    } else {
+      const edgeSet = new Map<string, StreetEdge>();
+      for (const nid of nodeIds) for (const e of byNode.get(nid)!) edgeSet.set(e.id, e);
+      res = computeJunction(g, nodeIds, [...edgeSet.values()], designs?.[[...nodeIds].sort().join('+')]);
+    }
     if (res) {
       junctions.push(res.poly);
       res.trims.forEach((t) => addTrim(t.edgeId, t.end, t.trim));
@@ -754,6 +793,10 @@ export function deriveNodeArtifacts(
 
   for (const [nodeId, edges] of byNode) {
     if (edges.length === 2 && edges[0].id !== edges[1].id) {
+      // Two parallel edges between the same node pair (a drawn loop) would
+      // produce a hairpin transition path folding back over both ribbons.
+      const far = (e: StreetEdge) => (e.a === nodeId ? e.b : e.a);
+      if (far(edges[0]) === far(edges[1])) continue;
       const res = transitionForNode(nodeId, edges[0], edges[1]);
       if (res) {
         transitions.push({ nodeId, bands: res.bands });
