@@ -204,6 +204,18 @@ export function subPolyline(flat: number[], s0: number, s1: number): number[] {
   return toFlat(dedupe(out, 0.01));
 }
 
+/** Ray-cast point-in-polygon over a flat closed polygon. */
+export function pointInPolygon(px: number, py: number, poly: number[]): boolean {
+  let inside = false;
+  const n = poly.length / 2;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = poly[i * 2], yi = poly[i * 2 + 1];
+    const xj = poly[j * 2], yj = poly[j * 2 + 1];
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
 /** Unit left-normal of segment a→b (y-down coords: left of travel direction). */
 function leftNormal(a: Pt, b: Pt): Pt {
   const dx = b.x - a.x;

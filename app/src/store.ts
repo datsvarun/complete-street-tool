@@ -9,6 +9,7 @@ import type {
   JunctionType,
   ReviewItem,
   SectionComponent,
+  SelectMode,
   Stage,
   StreetElement,
   Tool,
@@ -76,7 +77,10 @@ interface CstState extends GraphState {
   addDraftVert: (v: DraftVert) => void;
   finishDraft: (tolWorld: number) => void;
   cancelDraft: () => void;
-  selectEdge: (id: string | null, additive?: boolean) => void;
+  selectEdge: (id: string | null, mode?: boolean | SelectMode) => void;
+  selectEdges: (ids: string[], mode: SelectMode) => void;
+  selectAll: () => void;
+  fitAll: () => void;
   removeEdges: (ids: string[]) => void;
   setDesignOpacity: (v: number) => void;
   moveVertex: (edgeId: string, idx: number, x: number, y: number) => void;
@@ -196,14 +200,47 @@ export const useCst = create<CstState>()(
       },
 
       cancelDraft: () => set({ draft: [] }),
-      selectEdge: (id, additive) =>
+      selectEdge: (id, mode) =>
         set((s) => {
-          if (!additive || !id) {
+          const m = mode === true ? 'toggle' : mode || 'replace';
+          if (m === 'replace' || !id) {
             return { selectedEdgeId: id, selectedEdgeIds: id ? [id] : [] };
           }
           const has = s.selectedEdgeIds.includes(id);
+          if (m === 'add' && has) return { selectedEdgeId: id };
           const ids = has ? s.selectedEdgeIds.filter((x) => x !== id) : [...s.selectedEdgeIds, id];
           return { selectedEdgeIds: ids, selectedEdgeId: has ? (ids[ids.length - 1] ?? null) : id };
+        }),
+
+      selectEdges: (newIds, mode) =>
+        set((s) => {
+          let ids: string[];
+          if (mode === 'add') ids = [...new Set([...s.selectedEdgeIds, ...newIds])];
+          else if (mode === 'toggle') {
+            const cur = new Set(s.selectedEdgeIds);
+            for (const id of newIds) {
+              if (cur.has(id)) cur.delete(id);
+              else cur.add(id);
+            }
+            ids = [...cur];
+          } else ids = newIds;
+          return {
+            selectedEdgeIds: ids,
+            selectedEdgeId: ids[ids.length - 1] ?? null,
+            statusMsg: ids.length ? `${ids.length} street(s) selected` : '',
+          };
+        }),
+
+      selectAll: () =>
+        set((s) => {
+          const ids = Object.keys(s.edges);
+          return { selectedEdgeIds: ids, selectedEdgeId: ids[ids.length - 1] ?? null };
+        }),
+
+      fitAll: () =>
+        set((s) => {
+          const b = graphBounds(pickGraph(s));
+          return b ? { pendingFit: b } : {};
         }),
 
       removeEdges: (ids) =>

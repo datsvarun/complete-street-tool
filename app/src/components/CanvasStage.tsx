@@ -7,7 +7,8 @@ import { KIND_COLORS } from '../catalog';
 import { refFraction } from '../geometry/ribbon';
 import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
-import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts } from '../geometry/polyline';
+import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts, pointInPolygon } from '../geometry/polyline';
+import { BasemapFab, ScaleBar, CompassRose } from './FloatingUI';
 import { nodeClassOf } from '../types';
 import type { GraphNode, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { elementGraphics, laneDividers } from '../detailing/elements';
@@ -35,6 +36,21 @@ const NODE_COLORS = {
   junction: '#FF9800',
   crossroads: '#F44336',
 } as const;
+
+/** Reactive hover cursor: set on enter, clear on leave (falls back to the
+ *  container's tool cursor). */
+function hoverCursor(cur: string) {
+  return {
+    onMouseEnter: (e: KonvaEventObject<MouseEvent>) => {
+      const el = e.target.getStage()?.container();
+      if (el) el.style.cursor = cur;
+    },
+    onMouseLeave: (e: KonvaEventObject<MouseEvent>) => {
+      const el = e.target.getStage()?.container();
+      if (el) el.style.cursor = '';
+    },
+  };
+}
 
 function GridLayerImpl({ view, width, height }: { view: View; width: number; height: number }) {
   const lines = useMemo(() => {
@@ -134,7 +150,7 @@ function EdgeShape({
     }
     if (tool === 'select') {
       e.cancelBubble = true;
-      selectEdge(edge.id, e.evt.shiftKey);
+      selectEdge(edge.id, e.evt.shiftKey ? 'add' : e.evt.ctrlKey || e.evt.metaKey ? 'toggle' : 'replace');
     } else if (tool === 'split') {
       e.cancelBubble = true;
       const stageNode = e.target.getStage()!;
@@ -158,6 +174,7 @@ function EdgeShape({
           strokeWidth={0.6}
           strokeScaleEnabled={false}
           onClick={onClick}
+          {...hoverCursor('pointer')}
         />
       ))}
       {outline?.map((o, i) => (
@@ -190,6 +207,7 @@ function EdgeShape({
         strokeScaleEnabled={false}
         hitStrokeWidth={12}
         onClick={onClick}
+        {...hoverCursor('pointer')}
       />
     </>
   );
@@ -280,6 +298,7 @@ function NodesLayerImpl({
             e.cancelBubble = true;
             removeNodeSmart(n.id);
           }}
+          {...hoverCursor('move')}
           onDragStart={() => useCst.temporal.getState().pause()}
           onDragMove={(e) => {
             moveNodeTo(n.id, e.target.x(), e.target.y());
@@ -452,6 +471,7 @@ function DetailingLayerImpl({
           <Group
             key={el.id}
             draggable={interactive}
+            {...(interactive ? hoverCursor('move') : {})}
             opacity={el.placedBy === 'suggest' ? 0.75 : 1}
             onClick={(ev) => {
               if (!interactive) return;
@@ -565,6 +585,7 @@ function JunctionHandlesLayer({ j, scale }: { j: JunctionPoly; scale: number }) 
           strokeWidth={1.5}
           strokeScaleEnabled={false}
           draggable
+          {...hoverCursor('grab')}
           onDragStart={(ev) => {
             useCst.temporal.getState().pause();
             (ev.target as Konva.Shape).setAttr('dragFrom', { x: c.x, y: c.y, r: c.radiusM ?? 4 });
@@ -600,6 +621,7 @@ function JunctionHandlesLayer({ j, scale }: { j: JunctionPoly; scale: number }) 
           strokeWidth={1.5}
           strokeScaleEnabled={false}
           draggable
+          {...hoverCursor('grab')}
           onDragStart={(ev) => {
             useCst.temporal.getState().pause();
             (ev.target as Konva.Shape).setAttr('dragFrom', { x: ev.target.x(), y: ev.target.y(), trim: a.trim });
@@ -633,13 +655,15 @@ export function CanvasStage() {
   const [view, setView] = useState<View>({ x: 0, y: 0, scale: 5 });
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [snap, setSnap] = useState<Snap | null>(null);
+  // marquee/lasso region being dragged, world coords (marquee: [x0,y0,x1,y1])
+  const [region, setRegion] = useState<number[] | null>(null);
+  const regionRef = useRef<number[] | null>(null);
   const centeredRef = useRef(false);
 
   const stage = useCst((s) => s.stage);
   const tool = useCst((s) => s.tool);
   const origin = useCst((s) => s.origin);
   const basemap = useCst((s) => s.basemap);
-  const setBasemap = useCst((s) => s.setBasemap);
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
   const selectedEdgeIds = useCst((s) => s.selectedEdgeIds);
@@ -748,6 +772,58 @@ export function CanvasStage() {
     return { x: prev.x + len * Math.cos(ang), y: prev.y + len * Math.sin(ang) };
   };
 
+  /** Edge sample points (vertices + subdivided long segments) for region tests. */
+  const edgeSamples = (e: StreetEdge): number[] => {
+    const out: number[] = [];
+    const p = e.points;
+    for (let i = 0; i + 3 < p.length; i += 2) {
+      const segLen = Math.hypot(p[i + 2] - p[i], p[i + 3] - p[i + 1]);
+      const n = Math.max(1, Math.ceil(segLen / 8));
+      for (let k = 0; k < n; k++) {
+        out.push(p[i] + ((p[i + 2] - p[i]) * k) / n, p[i + 1] + ((p[i + 3] - p[i + 1]) * k) / n);
+      }
+    }
+    out.push(p[p.length - 2], p[p.length - 1]);
+    return out;
+  };
+
+  const onMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+    if ((tool !== 'marquee' && tool !== 'lasso') || e.evt.button !== 0) return;
+    const w = toWorld(e.target.getStage()!);
+    if (!w) return;
+    const start = tool === 'marquee' ? [w.x, w.y, w.x, w.y] : [w.x, w.y];
+    regionRef.current = start;
+    setRegion(start);
+  };
+
+  const onMouseUp = (e: KonvaEventObject<MouseEvent>) => {
+    const r = regionRef.current;
+    if (!r) return;
+    regionRef.current = null;
+    setRegion(null);
+    const mode = e.evt.shiftKey ? 'add' : e.evt.ctrlKey || e.evt.metaKey ? 'toggle' : 'replace';
+    let hit: string[] = [];
+    if (tool === 'marquee' && r.length === 4) {
+      const [x0, x1] = [Math.min(r[0], r[2]), Math.max(r[0], r[2])];
+      const [y0, y1] = [Math.min(r[1], r[3]), Math.max(r[1], r[3])];
+      if ((x1 - x0) * view.scale < 4 && (y1 - y0) * view.scale < 4) return; // a click, not a drag
+      hit = edgeList
+        .filter((ed) => edgeSamples(ed).some((_, i, a) => i % 2 === 0 && a[i] >= x0 && a[i] <= x1 && a[i + 1] >= y0 && a[i + 1] <= y1))
+        .map((ed) => ed.id);
+    } else if (tool === 'lasso' && r.length >= 6) {
+      hit = edgeList
+        .filter((ed) => {
+          const s = edgeSamples(ed);
+          for (let i = 0; i + 1 < s.length; i += 2) {
+            if (pointInPolygon(s[i], s[i + 1], r)) return true;
+          }
+          return false;
+        })
+        .map((ed) => ed.id);
+    } else return;
+    useCst.getState().selectEdges(hit, mode);
+  };
+
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
     const stageNode = e.target.getStage()!;
     if (tool === 'draw') {
@@ -772,6 +848,21 @@ export function CanvasStage() {
   const onMouseMove = (e: KonvaEventObject<MouseEvent>) => {
     const w = toWorld(e.target.getStage()!);
     if (!w) return;
+    const r = regionRef.current;
+    if (r) {
+      if (tool === 'marquee') {
+        const next = [r[0], r[1], w.x, w.y];
+        regionRef.current = next;
+        setRegion(next);
+      } else if (tool === 'lasso') {
+        const lx = r[r.length - 2], ly = r[r.length - 1];
+        if (Math.hypot(w.x - lx, w.y - ly) * view.scale > 3) {
+          const next = [...r, w.x, w.y];
+          regionRef.current = next;
+          setRegion(next);
+        }
+      }
+    }
     const c = constrain(w, e.evt.shiftKey);
     setCursor(c);
     if (tool === 'draw') {
@@ -822,7 +913,14 @@ export function CanvasStage() {
     <div
       ref={containerRef}
       className={basemapActive ? 'canvas-host with-basemap' : 'canvas-host'}
-      style={{ cursor: tool === 'draw' ? 'crosshair' : tool === 'split' ? 'cell' : 'grab' }}
+      style={{
+        cursor:
+          tool === 'draw' || tool === 'marquee' || tool === 'lasso'
+            ? 'crosshair'
+            : tool === 'split'
+              ? 'cell'
+              : 'default',
+      }}
       onContextMenu={(e) => e.preventDefault()}
     >
       {basemapActive && (
@@ -856,6 +954,8 @@ export function CanvasStage() {
         onWheel={onWheel}
         onClick={onClick}
         onDblClick={onDblClick}
+        onMouseDown={onMouseDown}
+        onMouseUp={onMouseUp}
         onMouseMove={onMouseMove}
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
@@ -883,6 +983,7 @@ export function CanvasStage() {
                 strokeScaleEnabled={false}
                 opacity={focusedJunction && j.key !== selectedJunctionKey ? 0.45 : 1}
                 onClick={stage === 'junctions' ? () => selectJunction(j.key) : undefined}
+                {...(stage === 'junctions' ? hoverCursor('pointer') : {})}
               />
             ))}
             {artifacts.junctions.flatMap((j) =>
@@ -983,23 +1084,40 @@ export function CanvasStage() {
               fill={snap.type === 'node' ? '#0a8f4b' : '#b3541e'}
             />
           )}
+          {region && tool === 'marquee' && region.length === 4 && (
+            <Rect
+              x={Math.min(region[0], region[2])}
+              y={Math.min(region[1], region[3])}
+              width={Math.abs(region[2] - region[0])}
+              height={Math.abs(region[3] - region[1])}
+              fill="rgba(217,122,46,0.08)"
+              stroke="#d97a2e"
+              strokeWidth={1}
+              dash={[4, 4]}
+              strokeScaleEnabled={false}
+            />
+          )}
+          {region && tool === 'lasso' && region.length >= 4 && (
+            <Line
+              points={region}
+              closed
+              fill="rgba(217,122,46,0.08)"
+              stroke="#d97a2e"
+              strokeWidth={1}
+              dash={[4, 4]}
+              strokeScaleEnabled={false}
+            />
+          )}
         </Layer>
       </Stage>
-      <div className="status-bar">
-        <span>{cursor ? `x ${cursor.x.toFixed(1)} m · y ${cursor.y.toFixed(1)} m` : '—'}</span>
-        <span>{view.scale.toFixed(1)} px/m</span>
-        <label className="basemap-pick">
-          basemap{' '}
-          <select value={basemap} onChange={(e) => setBasemap(e.target.value as typeof basemap)}>
-            <option value="none">none</option>
-            <option value="osm">OSM</option>
-            <option value="sat">Satellite</option>
-          </select>
-          {basemap !== 'none' && !origin && (
-            <span className="muted"> — search a place or import to anchor</span>
-          )}
-        </label>
-        <span className="hint">{hint}</span>
+      <div className="overlay fab-stack">
+        <BasemapFab />
+        <ScaleBar scale={view.scale} />
+      </div>
+      <CompassRose />
+      <div className="overlay hint-pill">{hint}</div>
+      <div className="overlay coords-pill">
+        {cursor ? `${cursor.x.toFixed(1)}, ${cursor.y.toFixed(1)} m` : ''}
       </div>
     </div>
   );

@@ -3,7 +3,9 @@
 
 export type Stage = 'network' | 'sections' | 'junctions' | 'detailing' | 'export';
 
-export type Tool = 'select' | 'draw' | 'split';
+export type Tool = 'select' | 'draw' | 'split' | 'marquee' | 'lasso';
+
+export type SelectMode = 'replace' | 'add' | 'toggle';
 
 export type ComponentKind =
   | 'carriageway'
