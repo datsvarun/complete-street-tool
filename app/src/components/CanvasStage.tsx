@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Line, Circle, Ring, Rect, Arrow } from 'react-konva';
+import { Stage, Layer, Line, Circle, Ring, Rect, Arrow, Group } from 'react-konva';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
@@ -9,7 +9,8 @@ import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
 import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts } from '../geometry/polyline';
 import { nodeClassOf } from '../types';
-import type { GraphNode, Snap, StreetEdge, Tool } from '../types';
+import type { GraphNode, Snap, StreetEdge, StreetElement, Tool } from '../types';
+import { elementGraphics, laneDividers } from '../detailing/elements';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifacts } from '../graph/junctions';
 import type { EdgeTrim, JunctionPoly } from '../graph/junctions';
@@ -114,6 +115,23 @@ function EdgeShape({
     return [toFlat(offsetPolyline(pts, base)), toFlat(offsetPolyline(pts, base - total))];
   }, [edge.points, section, showSections]);
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
+    const st = useCst.getState();
+    // Detailing: a click on the ribbon should place/select an element, not fall
+    // through to edge selection — the band would otherwise eat the placement.
+    if (st.stage === 'detailing') {
+      const stageNode = e.target.getStage()!;
+      const pos = stageNode.getPointerPosition()!;
+      const wx = (pos.x - stageNode.x()) / stageNode.scaleX();
+      const wy = (pos.y - stageNode.y()) / stageNode.scaleY();
+      if (st.placeKind) {
+        e.cancelBubble = true;
+        st.placeElementAt(wx, wy, 40 / stageNode.scaleX());
+      } else {
+        e.cancelBubble = true;
+        selectEdge(edge.id);
+      }
+      return;
+    }
     if (tool === 'select') {
       e.cancelBubble = true;
       selectEdge(edge.id, e.evt.shiftKey);
@@ -382,6 +400,128 @@ function findSnap(
   return best;
 }
 
+/** Stage 3 elements: parametric symbols that drag along/across their edge but
+ *  stay inside the component kinds their element type allows. */
+function DetailingLayerImpl({
+  elements,
+  edges,
+  trims,
+  interactive,
+  scale,
+  selectedElementId,
+}: {
+  elements: StreetElement[];
+  edges: Record<string, StreetEdge>;
+  trims: Record<string, EdgeTrim>;
+  interactive: boolean;
+  scale: number;
+  selectedElementId: string | null;
+}) {
+  const moveElement = useCst((s) => s.moveElement);
+  const removeElement = useCst((s) => s.removeElement);
+  const selectElement = useCst((s) => s.selectElement);
+  const tol = 40;
+
+  const dividers = useMemo(
+    () =>
+      Object.values(edges).flatMap((e) =>
+        laneDividers(e, trims[e.id]).map((pts, i) => ({ key: `${e.id}-lane${i}`, pts })),
+      ),
+    [edges, trims],
+  );
+
+  return (
+    <Layer listening={interactive}>
+      {dividers.map((d) => (
+        <Line
+          key={d.key}
+          points={d.pts}
+          stroke="#f2f0e9"
+          strokeWidth={0.8}
+          dash={[3, 4.5]}
+          strokeScaleEnabled={false}
+          listening={false}
+        />
+      ))}
+      {elements.map((el) => {
+        const edge = edges[el.edgeId];
+        if (!edge) return null;
+        const gfx = elementGraphics(edge, el);
+        if (gfx.length === 0) return null;
+        return (
+          <Group
+            key={el.id}
+            draggable={interactive}
+            opacity={el.placedBy === 'suggest' ? 0.75 : 1}
+            onClick={(ev) => {
+              if (!interactive) return;
+              ev.cancelBubble = true;
+              selectElement(el.id);
+            }}
+            onDragStart={() => useCst.temporal.getState().pause()}
+            onDragMove={(ev) => {
+              const stageNode = ev.target.getStage()!;
+              const pos = stageNode.getPointerPosition();
+              if (!pos) return;
+              moveElement(
+                el.id,
+                (pos.x - stageNode.x()) / stageNode.scaleX(),
+                (pos.y - stageNode.y()) / stageNode.scaleY(),
+                tol,
+              );
+              ev.target.position({ x: 0, y: 0 });
+            }}
+            onDragEnd={(ev) => {
+              useCst.temporal.getState().resume();
+              ev.target.position({ x: 0, y: 0 });
+            }}
+            onContextMenu={(ev) => {
+              ev.evt.preventDefault();
+              ev.cancelBubble = true;
+              removeElement(el.id);
+            }}
+          >
+            {el.id === selectedElementId && gfx[0] && (
+              <Circle
+                x={gfx[0].shape === 'circle' ? gfx[0].x : gfx[0].pts![0]}
+                y={gfx[0].shape === 'circle' ? gfx[0].y : gfx[0].pts![1]}
+                radius={8 / scale}
+                stroke="#e08e45"
+                strokeWidth={1.5}
+                strokeScaleEnabled={false}
+              />
+            )}
+            {gfx.map((g, gi) =>
+              g.shape === 'circle' ? (
+                <Circle
+                  key={gi}
+                  x={g.x}
+                  y={g.y}
+                  radius={g.r}
+                  fill={g.fill}
+                  stroke={g.stroke}
+                  strokeWidth={g.strokeWidth}
+                />
+              ) : (
+                <Line
+                  key={gi}
+                  points={g.pts}
+                  closed={g.closed}
+                  fill={g.fill}
+                  stroke={g.stroke}
+                  strokeWidth={g.strokeWidth ?? 0}
+                  dash={g.dash}
+                />
+              ),
+            )}
+          </Group>
+        );
+      })}
+    </Layer>
+  );
+}
+const DetailingLayer = memo(DetailingLayerImpl);
+
 const TURN_COLORS: Record<string, string> = {
   through: '#4a90d9',
   left: '#4CAF50',
@@ -506,6 +646,9 @@ export function CanvasStage() {
   const junctionDesigns = useCst((s) => s.junctionDesigns);
   const selectedJunctionKey = useCst((s) => s.selectedJunctionKey);
   const selectJunction = useCst((s) => s.selectJunction);
+  const elements = useCst((s) => s.elements);
+  const placeKind = useCst((s) => s.placeKind);
+  const selectedElementId = useCst((s) => s.selectedElementId);
   const designOpacity = useCst((s) => s.designOpacity);
   const highlightEdges = useCst((s) => s.highlightEdges);
   const draft = useCst((s) => s.draft);
@@ -515,6 +658,7 @@ export function CanvasStage() {
 
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const nodeList = useMemo(() => Object.values(nodes), [nodes]);
+  const elementList = useMemo(() => Object.values(elements), [elements]);
   const degrees = useMemo(() => {
     const d: Record<string, number> = {};
     const g = { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 };
@@ -615,8 +759,13 @@ export function CanvasStage() {
       // the previous vertex (which the stationary-dblclick check then eats).
       const s = findSnap(c.x, c.y, SNAP_PX / view.scale, nodes, edges);
       addDraftVert(s ? { x: s.x, y: s.y, snap: s } : { x: c.x, y: c.y, snap: null });
+    } else if (stage === 'detailing' && placeKind) {
+      const w = toWorld(stageNode);
+      if (w) useCst.getState().placeElementAt(w.x, w.y, 40 / view.scale);
     } else if (tool === 'select' && e.target === stageNode) {
-      useCst.getState().selectEdge(null);
+      if (stage === 'detailing') useCst.getState().selectElement(null);
+      else if (stage === 'junctions') selectJunction(null);
+      else useCst.getState().selectEdge(null);
     }
   };
 
@@ -654,7 +803,11 @@ export function CanvasStage() {
           ? 'Click a street to select it, then pick a section from the panel'
           : stage === 'junctions'
             ? 'Junction polygons are derived from the graph — pick one from the panel to zoom to it'
-            : 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge';
+            : stage === 'detailing'
+              ? placeKind
+                ? `Click a street to place a ${placeKind} · drag to move it within its band · right-click to remove`
+                : 'Pick an element from the palette, or drag/right-click existing ones · Esc deselects tool'
+              : 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge';
 
   const previewPoints =
     tool === 'draw' && draft.length >= 1 && cursor
@@ -795,6 +948,16 @@ export function CanvasStage() {
           />
         )}
         {focusedJunction && <JunctionHandlesLayer j={focusedJunction} scale={view.scale} />}
+        {showSections && Object.keys(elements).length > 0 && (
+          <DetailingLayer
+            elements={elementList}
+            edges={edges}
+            trims={artifacts.trims}
+            interactive={stage === 'detailing'}
+            scale={view.scale}
+            selectedElementId={selectedElementId}
+          />
+        )}
         <Layer listening={false}>
           {draftFlat.length >= 4 && (
             <Line points={draftFlat} stroke="#b3541e" strokeWidth={2} strokeScaleEnabled={false} />

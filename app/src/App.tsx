@@ -7,6 +7,8 @@ import { CanvasStage } from './components/CanvasStage';
 import { StripEditor } from './components/StripEditor';
 import { GeocodeSearch } from './components/GeocodeSearch';
 import { JunctionsPanel } from './components/JunctionsPanel';
+import { DetailingPanel } from './components/DetailingPanel';
+import { ExportPanel } from './components/ExportPanel';
 
 export default function App() {
   const stage = useCst((s) => s.stage);
@@ -27,12 +29,15 @@ export default function App() {
         t.redo();
       } else if (e.key === 'Escape') {
         if (s.draft.length > 0) s.cancelDraft();
+        else if (s.placeKind) s.setPlaceKind(null);
         else if (s.tool !== 'select') s.setTool('select');
+        else if (s.selectedElementId) s.selectElement(null);
         else s.selectEdge(null);
       } else if (e.key === 'Enter' && s.draft.length >= 2) {
         s.finishDraft(0.5);
-      } else if ((e.key === 'Delete' || e.key === 'Backspace') && s.selectedEdgeIds.length > 0) {
-        s.removeEdges(s.selectedEdgeIds);
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (s.selectedElementId) s.removeElement(s.selectedElementId);
+        else if (s.selectedEdgeIds.length > 0) s.removeEdges(s.selectedEdgeIds);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -72,6 +77,10 @@ export default function App() {
             <SectionsPanel />
           ) : stage === 'junctions' ? (
             <JunctionsPanel />
+          ) : stage === 'detailing' ? (
+            <DetailingPanel />
+          ) : stage === 'export' ? (
+            <ExportPanel />
           ) : (
             <NetworkPanel />
           )}

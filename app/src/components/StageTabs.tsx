@@ -5,8 +5,8 @@ const STAGES: Array<{ id: Stage; label: string; enabled: boolean }> = [
   { id: 'network', label: '1 · Network', enabled: true },
   { id: 'sections', label: '2 · Sections', enabled: true },
   { id: 'junctions', label: '2A · Junctions', enabled: true },
-  { id: 'detailing', label: '3 · Detailing', enabled: false },
-  { id: 'export', label: '4 · Export', enabled: false },
+  { id: 'detailing', label: '3 · Detailing', enabled: true },
+  { id: 'export', label: '4 · Export', enabled: true },
 ];
 
 export function StageTabs() {

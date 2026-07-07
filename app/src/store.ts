@@ -3,14 +3,18 @@ import { temporal } from 'zundo';
 import type {
   DcCandidate,
   DraftVert,
+  ElementKind,
   GraphState,
   JunctionDesign,
   JunctionType,
   ReviewItem,
   SectionComponent,
   Stage,
+  StreetElement,
   Tool,
 } from './types';
+import { DEFAULT_WIDTH, resolveDrop, suggestElements } from './detailing/elements';
+import { deriveNodeArtifacts } from './graph/junctions';
 import {
   commitDraft,
   deleteEdge,
@@ -52,6 +56,12 @@ interface CstState extends GraphState {
    *  Only junctions the user touched appear here (Plan v2 §1.2). */
   junctionDesigns: Record<string, JunctionDesign>;
   selectedJunctionKey: string | null; // focused junction in stage 2A
+  /** Stage 3 elements, anchored (edge, station, component, fraction). */
+  elements: Record<string, StreetElement>;
+  nextElementNum: number;
+  placeKind: ElementKind | null;      // active palette tool (UI state)
+  placeVariant: string | null;        // e.g. turn arrow direction
+  selectedElementId: string | null;
   designOpacity: number;              // 0.2–1, sections/junctions layer alpha
   draft: DraftVert[];
   dcCandidates: DcCandidate[] | null; // null = not scanned yet
@@ -95,6 +105,14 @@ interface CstState extends GraphState {
   setHighlight: (ids: string[]) => void;
   setBasemap: (b: Basemap) => void;
   goTo: (p: LatLon, label: string) => void;
+  setPlaceKind: (kind: ElementKind | null, variant?: string | null) => void;
+  placeElementAt: (wx: number, wy: number, tolM: number) => void;
+  moveElement: (id: string, wx: number, wy: number, tolM: number) => void;
+  removeElement: (id: string) => void;
+  selectElement: (id: string | null) => void;
+  suggest: (kind: ElementKind) => void;
+  clearSuggestions: () => void;
+  setEdgeLanes: (edgeId: string, lanes: number) => void;
   selectJunction: (key: string | null) => void;
   setJunctionType: (jKey: string, type: JunctionType) => void;
   setCornerRadius: (jKey: string, cornerKey: string, radiusM: number | null) => void;
@@ -138,6 +156,11 @@ export const useCst = create<CstState>()(
       selectedEdgeIds: [],
       junctionDesigns: {},
       selectedJunctionKey: null,
+      elements: {},
+      nextElementNum: 1,
+      placeKind: null,
+      placeVariant: null,
+      selectedElementId: null,
       designOpacity: 1,
       draft: [],
       dcCandidates: null,
@@ -438,6 +461,94 @@ export const useCst = create<CstState>()(
           };
         }),
 
+      setPlaceKind: (kind, variant = null) =>
+        set({ placeKind: kind, placeVariant: variant, selectedElementId: null }),
+
+      placeElementAt: (wx, wy, tolM) =>
+        set((s) => {
+          if (!s.placeKind) return {};
+          const p = resolveDrop(pickGraph(s), s.placeKind, wx, wy, tolM);
+          if (!p) return { statusMsg: `no eligible ${s.placeKind} location there` };
+          const id = `x${s.nextElementNum}`;
+          const el: StreetElement = {
+            id,
+            kind: s.placeKind,
+            ...p,
+            variant: s.placeVariant ?? undefined,
+            widthM: DEFAULT_WIDTH[s.placeKind],
+            placedBy: 'user',
+          };
+          return {
+            elements: { ...s.elements, [id]: el },
+            nextElementNum: s.nextElementNum + 1,
+            selectedElementId: id,
+            statusMsg: `${s.placeKind} placed`,
+          };
+        }),
+
+      moveElement: (id, wx, wy, tolM) =>
+        set((s) => {
+          const el = s.elements[id];
+          if (!el) return {};
+          const p = resolveDrop(pickGraph(s), el.kind, wx, wy, tolM);
+          if (!p) return {};
+          return {
+            elements: { ...s.elements, [id]: { ...el, ...p, placedBy: 'user' } },
+          };
+        }),
+
+      removeElement: (id) =>
+        set((s) => {
+          const elements = { ...s.elements };
+          delete elements[id];
+          return {
+            elements,
+            selectedElementId: s.selectedElementId === id ? null : s.selectedElementId,
+            statusMsg: 'element removed',
+          };
+        }),
+
+      selectElement: (id) => set({ selectedElementId: id }),
+
+      suggest: (kind) =>
+        set((s) => {
+          const { trims } = deriveNodeArtifacts(pickGraph(s), s.junctionDesigns);
+          const created = suggestElements(pickGraph(s), kind, Object.values(s.elements), trims);
+          if (created.length === 0) return { statusMsg: `no eligible belts for ${kind} suggestions` };
+          const elements = { ...s.elements };
+          let n = s.nextElementNum;
+          for (const el of created) {
+            const id = `x${n++}`;
+            elements[id] = { ...el, id };
+          }
+          return {
+            elements,
+            nextElementNum: n,
+            statusMsg: `${created.length} ${kind}(s) suggested — drag to adjust, right-click to remove`,
+          };
+        }),
+
+      clearSuggestions: () =>
+        set((s) => {
+          const elements = Object.fromEntries(
+            Object.entries(s.elements).filter(([, el]) => el.placedBy !== 'suggest'),
+          );
+          const n = Object.keys(s.elements).length - Object.keys(elements).length;
+          return { elements, statusMsg: `${n} suggestion(s) cleared` };
+        }),
+
+      setEdgeLanes: (edgeId, lanes) =>
+        set((s) => {
+          const e = s.edges[edgeId];
+          if (!e) return {};
+          return {
+            edges: {
+              ...s.edges,
+              [edgeId]: { ...e, lanes: lanes >= 2 ? Math.min(6, Math.round(lanes)) : undefined },
+            },
+          };
+        }),
+
       selectJunction: (key) => set({ selectedJunctionKey: key }),
 
       setJunctionType: (jKey, type) =>
@@ -503,9 +614,14 @@ export const useCst = create<CstState>()(
         origin: s.origin,
         selectedEdgeId: s.selectedEdgeId,
         junctionDesigns: s.junctionDesigns,
+        elements: s.elements,
+        nextElementNum: s.nextElementNum,
       }),
       equality: (a, b) =>
-        a.nodes === b.nodes && a.edges === b.edges && a.junctionDesigns === b.junctionDesigns,
+        a.nodes === b.nodes &&
+        a.edges === b.edges &&
+        a.junctionDesigns === b.junctionDesigns &&
+        a.elements === b.elements,
       limit: 100,
     },
   ),

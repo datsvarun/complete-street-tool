@@ -213,6 +213,52 @@ button.mini {
   line-height: 1.5;
 }
 
+.palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+button.chip {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 14px;
+}
+
+button.chip.active {
+  background: var(--accent, #b3541e);
+  color: #fff;
+  border-color: var(--accent, #b3541e);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 8px;
+}
+
+.field input,
+.field select {
+  width: 100%;
+}
+
+.plan-preview {
+  border: 1px solid var(--border, #ccc);
+  background: #faf8f2;
+  border-radius: 4px;
+  padding: 4px;
+  overflow: auto;
+  max-height: 360px;
+}
+
+.plan-preview svg {
+  width: 100%;
+  height: auto;
+}
+
 .small {
   font-size: 12px;
 }

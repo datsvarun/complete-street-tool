@@ -100,6 +100,37 @@ export interface StreetEdge {
   oneway?: boolean;
   carriagewayType?: 'undivided' | 'divided';
   medianWidth?: number;      // estimate, metres (set by dual-carriageway merge)
+  lanes?: number;            // lane count per carriageway → derived divider markings (Stage 3)
+}
+
+// ── Stage 3 detailing ────────────────────────────────────────────────────
+// Elements are anchored PARAMETRICALLY: station along the edge centerline +
+// a component index and fraction across it. Geometry edits (moving nodes,
+// resizing components) carry every element along; deleting its component or
+// edge makes it stale, never wrong (Plan v2 §1.2).
+
+export type ElementKind =
+  | 'tree'
+  | 'streetlight'
+  | 'dustbin'
+  | 'bench'
+  | 'bollard'
+  | 'busstop'
+  | 'turnarrow'        // variant: 'left' | 'through' | 'right'
+  | 'zebra'            // crossing band over the drivable width
+  | 'raisedcrossing'
+  | 'driveway';        // property entrance across the raised stack on one side
+
+export interface StreetElement {
+  id: string;
+  kind: ElementKind;
+  edgeId: string;
+  stationM: number;    // along the edge centerline
+  compIndex: number;   // anchor component (-1 for zebra/raised: they span the carriageway)
+  t: number;           // 0..1 across the anchor component (0 = its left boundary)
+  variant?: string;    // turnarrow: 'left' | 'through' | 'right'
+  widthM?: number;     // along-street width for zebra/raised/driveway
+  placedBy?: 'user' | 'suggest';
 }
 
 /** The undoable graph core shared by all stages. */
