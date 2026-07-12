@@ -1,8 +1,11 @@
 # IRC Street Designer
 
 ## Read first
+- ROADMAP.md (what's done, what's next, extension guide — start here)
+- ARCHITECTURE.md (how the system is built — data model, pipelines, gotchas)
 - IRC_Street_Designer_Plan_v2.md (current plan — stages, done-when criteria)
 - Case_Study.md (algorithm ports with pseudocode — use these, don't reinvent)
+- CAD_Architecture.md (design for node-level editing of derived geometry)
 - Stack_Recommendation.md (locked stack — don't substitute libraries)
 
 ## Project rules

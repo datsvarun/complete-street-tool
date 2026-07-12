@@ -15,6 +15,10 @@ top-to-bottom once; afterwards each module should be modifiable in isolation.
 - `CLAUDE.md` — working rules. App code in `/app`; docs at root; **all
   geometry in a local metric CRS, lat/lon only at the map boundary**; one
   phase-slice per session.
+- `ROADMAP.md` — what's done, what's next, in what order; contributor
+  extension guide. **Start here to pick up work.**
+- `CAD_Architecture.md` — design for node-level editing of derived geometry
+  (the keyed-vertex layer).
 
 ---
 
