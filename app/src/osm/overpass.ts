@@ -33,16 +33,24 @@ const KEEP = new Set([
   'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link',
 ]);
 
-interface OsmNode { type: 'node'; id: number; lat: number; lon: number }
+// Separate pedestrian-only geometries, off by default (see ImportFilters).
+const KEEP_PATHS = new Set(['footway', 'path', 'steps', 'track']);
+
+/** What the user chose to download / keep from OSM. */
+export interface ImportFilters {
+  /** Keep elevated ways (bridge=* flyovers). Off = at-grade network only. */
+  flyovers: boolean;
+  /** Keep highway=service alleys and parking aisles. */
+  serviceRoads: boolean;
+  /** Also import separate footway/path/steps geometries. */
+  paths: boolean;
+}
+
+export const DEFAULT_FILTERS: ImportFilters = { flyovers: true, serviceRoads: true, paths: false };
+
+interface OsmNode { type: 'node'; id: number; lat: number; lon: number; tags?: Record<string, string> }
 interface OsmWay { type: 'way'; id: number; nodes: number[]; tags?: Record<string, string> }
 export interface OsmJson { elements: Array<OsmNode | OsmWay> }
-
-export function buildQuery(lat: number, lon: number, radiusM: number): string {
-  const dLat = radiusM / 111320;
-  const dLon = radiusM / (111320 * Math.cos((lat * Math.PI) / 180));
-  const bbox = `${lat - dLat},${lon - dLon},${lat + dLat},${lon + dLon}`;
-  return `[out:json][timeout:30];(way["highway"](${bbox});>;);out body;`;
-}
 
 async function runOverpass(query: string): Promise<OsmJson> {
   const res = await fetch(OVERPASS_URL, {
@@ -55,26 +63,50 @@ async function runOverpass(query: string): Promise<OsmJson> {
   return (await res.json()) as OsmJson;
 }
 
-export async function fetchOverpass(lat: number, lon: number, radiusM: number): Promise<OsmJson> {
-  return runOverpass(buildQuery(lat, lon, radiusM));
+/** Exact-extent fetch: only the user-confirmed box downloads. Also brings
+ *  bus-stop nodes in the box for detailing suggestions. */
+export async function fetchOverpassBbox(south: number, west: number, north: number, east: number): Promise<OsmJson> {
+  const b = `${south},${west},${north},${east}`;
+  return runOverpass(
+    `[out:json][timeout:30];(way["highway"](${b});>;node["highway"="bus_stop"](${b}););out body;`,
+  );
 }
 
-/** Exact-extent fetch: only the user-confirmed box downloads. */
-export async function fetchOverpassBbox(south: number, west: number, north: number, east: number): Promise<OsmJson> {
-  return runOverpass(`[out:json][timeout:30];(way["highway"](${south},${west},${north},${east});>;);out body;`);
+/** Bus-stop nodes in the download, projected to local metres — a hint layer
+ *  for Stage 3 "suggest bus stops", not part of the graph. */
+export interface BusStopPoint { x: number; y: number; name?: string }
+
+export function parseBusStops(data: OsmJson, center: LatLon): BusStopPoint[] {
+  const out: BusStopPoint[] = [];
+  for (const el of data.elements) {
+    if (el.type === 'node' && el.tags?.highway === 'bus_stop') {
+      const p = toLocal(center, el);
+      out.push({ x: p.x, y: p.y, ...(el.tags.name ? { name: el.tags.name } : {}) });
+    }
+  }
+  return out;
+}
+
+function keepWay(tags: Record<string, string>, f: ImportFilters): boolean {
+  const hw = tags.highway;
+  if (!hw) return false;
+  if (!(KEEP.has(hw) || (f.paths && KEEP_PATHS.has(hw)))) return false;
+  if (!f.serviceRoads && hw === 'service') return false;
+  if (!f.flyovers && tags.bridge && tags.bridge !== 'no') return false;
+  return true;
 }
 
 /**
- * OSM ways → GraphState: keep street classes, split ways at shared nodes,
- * project to a local metric CRS around `center` (y grows south/down).
- * The caller stores `center` as the graph's projection origin.
+ * OSM ways → GraphState: keep street classes (per `filters`), split ways at
+ * shared nodes, project to a local metric CRS around `center` (y grows
+ * south/down). The caller stores `center` as the graph's projection origin.
  */
-export function parseOsm(data: OsmJson, center: LatLon): GraphState {
+export function parseOsm(data: OsmJson, center: LatLon, filters: ImportFilters = DEFAULT_FILTERS): GraphState {
   const osmNodes = new Map<number, OsmNode>();
   const ways: OsmWay[] = [];
   for (const el of data.elements) {
     if (el.type === 'node') osmNodes.set(el.id, el);
-    else if (el.type === 'way' && el.tags?.highway && KEEP.has(el.tags.highway)) ways.push(el);
+    else if (el.type === 'way' && el.tags && keepWay(el.tags, filters)) ways.push(el);
   }
   const proj = (n: OsmNode) => toLocal(center, n);
 

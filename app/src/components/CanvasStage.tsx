@@ -161,6 +161,9 @@ function EdgeShape({
       const stageNode = e.target.getStage()!;
       const w = stageToWorld(stageNode);
       if (w) splitEdgeAt(edge.id, w.x, w.y);
+    } else if (tool === 'erase') {
+      e.cancelBubble = true;
+      st.removeEdges([edge.id]);
     }
   };
   const s = edgeStroke(edge, selected, highlighted, showSections && !!section);
@@ -301,6 +304,11 @@ function NodesLayerImpl({
             e.cancelBubble = true;
             removeNodeSmart(n.id);
           }}
+          onClick={(e) => {
+            if (useCst.getState().tool !== 'erase') return;
+            e.cancelBubble = true;
+            removeNodeSmart(n.id);
+          }}
           {...hoverCursor('move')}
           onDragStart={() => useCst.temporal.getState().pause()}
           onDragMove={(e) => {
@@ -385,6 +393,11 @@ function VerticesLayerImpl({
               {...(draggable ? hoverCursor('move') : {})}
               onContextMenu={(ev) => {
                 ev.evt.preventDefault();
+                ev.cancelBubble = true;
+                removeVertex(e.id, i);
+              }}
+              onClick={(ev) => {
+                if (useCst.getState().tool !== 'erase') return;
                 ev.cancelBubble = true;
                 removeVertex(e.id, i);
               }}
@@ -1113,6 +1126,7 @@ export function CanvasStage() {
   const TOOL_HINTS: Partial<Record<Tool, string>> = {
     draw: 'Click to add points (snaps to nodes/edges · Shift = 15° angles) · double-click or Enter to finish · Esc to cancel',
     split: 'Click a street to insert a node (a node between different sections becomes a transition)',
+    erase: 'Click a street or node to delete it · V returns to select',
     direct: 'Direct selection — drag nodes to move/merge/weld, drag vertices to bend, right-click removes',
     marquee: 'Drag a box to select streets · Shift adds · Ctrl toggles · V returns to select',
     lasso: 'Draw around streets to select them · Shift adds · Ctrl toggles · V returns to select',
@@ -1150,7 +1164,7 @@ export function CanvasStage() {
         cursor:
           tool === 'draw' || tool === 'marquee' || tool === 'lasso' || !!boxDraw || (stage === 'edit' && patchKind)
             ? 'crosshair'
-            : tool === 'split'
+            : tool === 'split' || tool === 'erase'
               ? 'cell'
               : 'default',
       }}

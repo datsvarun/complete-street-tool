@@ -26,6 +26,7 @@ const TOOL_KEYS: Record<string, Tool> = {
   a: 'direct',
   d: 'draw',
   x: 'split',
+  e: 'erase',
   m: 'marquee',
   l: 'lasso',
 };
@@ -74,8 +75,8 @@ export default function App() {
           s.setStage(STAGE_KEYS[k]);
           setPanelOpen(true);
         } else if (TOOL_KEYS[k]) {
-          // direct/draw/split are network-only (nodes & vertices live there)
-          if (['direct', 'draw', 'split'].includes(TOOL_KEYS[k]) && s.stage !== 'network') return;
+          // direct/draw/split/erase are network-only (nodes & vertices live there)
+          if (['direct', 'draw', 'split', 'erase'].includes(TOOL_KEYS[k]) && s.stage !== 'network') return;
           s.setTool(TOOL_KEYS[k]);
         } else if (k === 'f') {
           s.fitAll();

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useCst, DEFAULT_IMPORT } from '../store';
+import { useMemo } from 'react';
+import { useCst } from '../store';
 import { polylineLength } from '../geometry/polyline';
 import { validateGraph } from '../graph/validate';
 
@@ -18,8 +18,9 @@ export function NetworkPanel() {
   const selectEdge = useCst((s) => s.selectEdge);
   const simplifyAll = useCst((s) => s.simplifyAll);
   const cleanNetwork = useCst((s) => s.cleanNetwork);
-  const importOsm = useCst((s) => s.importOsm);
   const importOsmBbox = useCst((s) => s.importOsmBbox);
+  const importFilters = useCst((s) => s.importFilters);
+  const setImportFilter = useCst((s) => s.setImportFilter);
   const setBoxDraw = useCst((s) => s.setBoxDraw);
   const boxDraw = useCst((s) => s.boxDraw);
   const importBox = useCst((s) => s.importBox);
@@ -28,19 +29,6 @@ export function NetworkPanel() {
   const scanDualCarriageways = useCst((s) => s.scanDualCarriageways);
   const applyDcMerge = useCst((s) => s.applyDcMerge);
   const setHighlight = useCst((s) => s.setHighlight);
-
-  const importTarget = useCst((s) => s.importTarget);
-  const [lat, setLat] = useState(String(DEFAULT_IMPORT.lat));
-  const [lon, setLon] = useState(String(DEFAULT_IMPORT.lon));
-  const [radius, setRadius] = useState(String(DEFAULT_IMPORT.radiusM));
-
-  // Geocoding a place points the import here.
-  useEffect(() => {
-    if (importTarget) {
-      setLat(importTarget.lat.toFixed(5));
-      setLon(importTarget.lon.toFixed(5));
-    }
-  }, [importTarget]);
 
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const issues = useMemo(() => validateGraph({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }), [nodes, edges]);
@@ -63,6 +51,32 @@ export function NetworkPanel() {
           <button onClick={() => setBox('import', null)}>Clear</button>
         )}
       </div>
+      <div className="filter-row">
+        <label title="Keep elevated ways (bridge=*) — off imports the at-grade network only">
+          <input
+            type="checkbox"
+            checked={importFilters.flyovers}
+            onChange={(e) => setImportFilter('flyovers', e.target.checked)}
+          />
+          flyovers
+        </label>
+        <label title="Keep service alleys and parking aisles">
+          <input
+            type="checkbox"
+            checked={importFilters.serviceRoads}
+            onChange={(e) => setImportFilter('serviceRoads', e.target.checked)}
+          />
+          service lanes
+        </label>
+        <label title="Also import separate footway/path geometries">
+          <input
+            type="checkbox"
+            checked={importFilters.paths}
+            onChange={(e) => setImportFilter('paths', e.target.checked)}
+          />
+          footpaths
+        </label>
+      </div>
       {importBox && (() => {
         const wKm = (importBox.maxX - importBox.minX) / 1000;
         const hKm = (importBox.maxY - importBox.minY) / 1000;
@@ -82,35 +96,7 @@ export function NetworkPanel() {
         );
       })()}
 
-      <h3>Import OSM — by point</h3>
-      <div className="field-row">
-        <label>
-          lat
-          <input value={lat} onChange={(e) => setLat(e.target.value)} />
-        </label>
-        <label>
-          lon
-          <input value={lon} onChange={(e) => setLon(e.target.value)} />
-        </label>
-        <label>
-          r (m)
-          <input value={radius} onChange={(e) => setRadius(e.target.value)} />
-        </label>
-      </div>
       <div className="tool-row">
-        <button
-          disabled={importBusy}
-          onClick={() => {
-            const la = parseFloat(lat), lo = parseFloat(lon), r = parseFloat(radius);
-            if (!Number.isFinite(la) || !Number.isFinite(lo) || Math.abs(la) > 90 || Math.abs(lo) > 180) {
-              useCst.setState({ statusMsg: 'Enter a valid lat/lon before importing' });
-              return;
-            }
-            importOsm(la, lo, Math.min(Math.max(Number.isFinite(r) ? r : 250, 50), 1500));
-          }}
-        >
-          Import from OSM
-        </button>
         <button disabled={importBusy} onClick={() => loadSample()}>
           Pune sample
         </button>

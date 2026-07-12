@@ -36,8 +36,8 @@ import {
 } from './graph/ops';
 import { runStandardPipeline } from './graph/transforms';
 import { detectDualCarriageways, manualDcCandidate, mergeDualCarriageway } from './graph/dualCarriageway';
-import { fetchOverpass, fetchOverpassBbox, parseOsm, toLatLon, toLocal, DEFAULT_IMPORT } from './osm/overpass';
-import type { LatLon } from './osm/overpass';
+import { DEFAULT_FILTERS, fetchOverpassBbox, parseBusStops, parseOsm, toLatLon, toLocal, DEFAULT_IMPORT } from './osm/overpass';
+import type { BusStopPoint, ImportFilters, LatLon } from './osm/overpass';
 import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
 
@@ -54,8 +54,6 @@ interface CstState extends GraphState {
   /** Projection origin: lat/lon of local (0,0). Set by import or geocoding. */
   origin: LatLon | null;
   basemap: Basemap;
-  /** Last geocoded place — NetworkPanel syncs its import fields to this. */
-  importTarget: LatLon | null;
   selectedEdgeId: string | null;      // primary selection (last clicked)
   selectedEdgeIds: string[];          // full multi-selection (shift-click)
   /** Junction parameter overrides, keyed by sorted-node-id junction key.
@@ -78,6 +76,10 @@ interface CstState extends GraphState {
   boxDraw: 'import' | 'export' | null;
   importBox: Bounds | null;
   exportBounds: Bounds | null;
+  /** What to keep when downloading from OSM (flyovers, service roads, paths). */
+  importFilters: ImportFilters;
+  /** Bus-stop nodes from the last OSM download (local metres) — suggestion hints. */
+  busStops: BusStopPoint[];
   designOpacity: number;              // 0.2–1, sections/junctions layer alpha
   draft: DraftVert[];
   dcCandidates: DcCandidate[] | null; // null = not scanned yet
@@ -118,8 +120,8 @@ interface CstState extends GraphState {
   splitEdgeAt: (edgeId: string, x: number, y: number) => void;
   simplifyAll: (tolM: number) => void;
   cleanNetwork: () => void;
-  importOsm: (lat: number, lon: number, radiusM: number) => Promise<void>;
   importOsmBbox: () => Promise<void>;
+  setImportFilter: (key: keyof ImportFilters, value: boolean) => void;
   setBoxDraw: (purpose: 'import' | 'export' | null) => void;
   setBox: (purpose: 'import' | 'export', b: Bounds | null) => void;
   loadSample: () => Promise<void>;
@@ -208,7 +210,6 @@ export const useCst = create<CstState>()(
       // (on an empty graph) geocoding re-anchor it.
       origin: { lat: DEFAULT_IMPORT.lat, lon: DEFAULT_IMPORT.lon },
       basemap: 'osm',
-      importTarget: null,
       selectedEdgeId: null,
       selectedEdgeIds: [],
       junctionDesigns: {},
@@ -226,6 +227,8 @@ export const useCst = create<CstState>()(
       boxDraw: null,
       importBox: null,
       exportBounds: null,
+      importFilters: { ...DEFAULT_FILTERS },
+      busStops: [],
       designOpacity: 1,
       draft: [],
       dcCandidates: null,
@@ -562,40 +565,6 @@ export const useCst = create<CstState>()(
           return { ...g, elements: pruneElements(g, s.elements), dcCandidates: null, statusMsg: summary };
         }),
 
-      importOsm: async (lat, lon, radiusM) => {
-        set({ importBusy: true, statusMsg: 'Fetching from Overpass…' });
-        try {
-          const data = await fetchOverpass(lat, lon, radiusM);
-          const g = parseOsm(data, { lat, lon });
-          const cleaned = runStandardPipeline(g);
-          set({
-            ...cleaned.g,
-            origin: { lat, lon },
-            importBusy: false,
-            selectedEdgeId: null,
-            selectedEdgeIds: [],
-            selectedElementId: null,
-            selectedJunctionKey: null,
-            placeKind: null,
-            elements: {},
-            nextElementNum: 1,
-            junctionDesigns: {},
-            patches: {},
-            nextPatchNum: 1,
-            selectedPatchId: null,
-            importBox: null,
-            exportBounds: null,
-            reviewList: [],
-            dcCandidates: null,
-            highlightEdges: [],
-            pendingFit: graphBounds(cleaned.g),
-            statusMsg: `Imported ${Object.keys(cleaned.g.edges).length} edges / ${Object.keys(cleaned.g.nodes).length} nodes (${cleaned.summary})`,
-          });
-        } catch (err) {
-          set({ importBusy: false, statusMsg: `Import failed: ${(err as Error).message}` });
-        }
-      },
-
       loadSample: async () => {
         set({ importBusy: true, statusMsg: 'Loading Pune sample…' });
         const data = (await import('./data/pune-sample.json')).default as unknown as Parameters<typeof parseOsm>[0];
@@ -604,6 +573,7 @@ export const useCst = create<CstState>()(
         set({
           ...cleaned.g,
           origin: { lat: DEFAULT_IMPORT.lat, lon: DEFAULT_IMPORT.lon },
+          busStops: parseBusStops(data, DEFAULT_IMPORT),
           importBusy: false,
           selectedEdgeId: null,
           selectedEdgeIds: [],
@@ -626,6 +596,9 @@ export const useCst = create<CstState>()(
         });
       },
 
+      setImportFilter: (key, value) =>
+        set((s) => ({ importFilters: { ...s.importFilters, [key]: value } })),
+
       setBoxDraw: (purpose) =>
         set({
           boxDraw: purpose,
@@ -647,11 +620,12 @@ export const useCst = create<CstState>()(
         set({ importBusy: true, statusMsg: 'Fetching the selected area from Overpass…' });
         try {
           const data = await fetchOverpassBbox(se.lat, nw.lon, nw.lat, se.lon);
-          const g = parseOsm(data, center);
+          const g = parseOsm(data, center, s.importFilters);
           const cleaned = runStandardPipeline(g);
           set({
             ...cleaned.g,
             origin: center,
+            busStops: parseBusStops(data, center),
             importBusy: false,
             selectedEdgeId: null,
             selectedEdgeIds: [],
@@ -709,7 +683,6 @@ export const useCst = create<CstState>()(
           if (!s.origin || Object.keys(s.edges).length === 0) {
             return {
               origin: p,
-              importTarget: p,
               // Boxes are world metres relative to the OLD origin — drop them
               // so they can't point at the wrong place after re-anchoring.
               importBox: null,
@@ -721,7 +694,6 @@ export const useCst = create<CstState>()(
           }
           const { x, y } = toLocal(s.origin, p);
           return {
-            importTarget: p,
             pendingFit: { minX: x - 260, minY: y - 260, maxX: x + 260, maxY: y + 260 },
             statusMsg: `Centered on ${label} — importing here replaces the current network`,
           };

@@ -63,11 +63,22 @@ header {
 
 .top-toolbar {
   display: flex;
-  gap: 2px;
+  gap: 0;
   background: var(--panel-raised);
   border: 1px solid var(--border);
   border-radius: 9px;
   padding: 3px;
+}
+
+.tt-group {
+  display: flex;
+  gap: 2px;
+}
+
+.tt-group + .tt-group {
+  border-left: 1px solid var(--border);
+  margin-left: 6px;
+  padding-left: 6px;
 }
 
 .tt-btn {
@@ -312,6 +323,22 @@ button.chip.active {
 .field-row {
   display: flex;
   gap: 6px;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 6px 0 2px;
+}
+
+.filter-row label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+  cursor: pointer;
 }
 
 .field-row label {
@@ -766,7 +793,7 @@ button.chip.active {
 
 .fab-stack {
   position: absolute;
-  left: 12px;
+  right: 14px;
   bottom: 14px;
   display: flex;
   align-items: flex-end;
@@ -903,7 +930,7 @@ button.chip.active {
 .coords-pill {
   position: absolute;
   right: 14px;
-  bottom: 40px;
+  bottom: 64px;
   font-size: 11px;
   color: var(--muted);
   background: rgba(255, 255, 255, 0.8);

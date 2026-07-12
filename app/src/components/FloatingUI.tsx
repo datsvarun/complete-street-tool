@@ -47,13 +47,21 @@ export function StageRail({
   );
 }
 
-const TOOLS: Array<{ id: Tool; icon: string; label: string; hint: string; stages?: Stage[] }> = [
-  { id: 'select', icon: '➤', label: 'Select', hint: 'Selection — click streets, Shift adds, Ctrl toggles (V)' },
-  { id: 'direct', icon: '▷', label: 'Direct', hint: 'Direct selection — move nodes and vertices (A)', stages: ['network'] },
-  { id: 'marquee', icon: '▭', label: 'Rect', hint: 'Rectangle select — drag a box (M)' },
-  { id: 'lasso', icon: '◌', label: 'Lasso', hint: 'Lasso select — draw around streets (L)' },
-  { id: 'draw', icon: '✎', label: 'Draw', hint: 'Draw streets (D)', stages: ['network'] },
-  { id: 'split', icon: '✂', label: 'Split', hint: 'Split a street at a point (X)', stages: ['network'] },
+type ToolDef = { id: Tool; icon: string; label: string; hint: string; stages?: Stage[] };
+
+// Grouped by function: selection tools | editing tools.
+const TOOL_GROUPS: ToolDef[][] = [
+  [
+    { id: 'select', icon: '➤', label: 'Select', hint: 'Selection — click streets, Shift adds, Ctrl toggles (V)' },
+    { id: 'direct', icon: '▷', label: 'Direct', hint: 'Direct selection — move nodes and vertices (A)', stages: ['network'] },
+    { id: 'marquee', icon: '▭', label: 'Rect', hint: 'Rectangle select — drag a box (M)' },
+    { id: 'lasso', icon: '◌', label: 'Lasso', hint: 'Lasso select — draw around streets (L)' },
+  ],
+  [
+    { id: 'draw', icon: '✎', label: 'Draw', hint: 'Draw streets (D)', stages: ['network'] },
+    { id: 'split', icon: '✂', label: 'Split', hint: 'Split a street at a point (X)', stages: ['network'] },
+    { id: 'erase', icon: '⌫', label: 'Delete', hint: 'Delete — click a street or node to remove it (E)', stages: ['network'] },
+  ],
 ];
 
 /** Standard tools live in the top bar; stage panels keep only their own
@@ -65,21 +73,25 @@ export function TopToolbar() {
   if (stage === 'export') return <div className="top-toolbar" />;
   return (
     <div className="top-toolbar">
-      {TOOLS.map((t) => {
-        const enabled = !t.stages || t.stages.includes(stage);
-        return (
-          <button
-            key={t.id}
-            className={tool === t.id ? 'tt-btn active' : 'tt-btn'}
-            title={t.hint + (enabled ? '' : ' — Network stage only')}
-            disabled={!enabled}
-            onClick={() => setTool(tool === t.id ? 'select' : t.id)}
-          >
-            <span className="tt-icon">{t.icon}</span>
-            <span className="tt-label">{t.label}</span>
-          </button>
-        );
-      })}
+      {TOOL_GROUPS.map((group, gi) => (
+        <div className="tt-group" key={gi}>
+          {group.map((t) => {
+            const enabled = !t.stages || t.stages.includes(stage);
+            return (
+              <button
+                key={t.id}
+                className={tool === t.id ? 'tt-btn active' : 'tt-btn'}
+                title={t.hint + (enabled ? '' : ' — Network stage only')}
+                disabled={!enabled}
+                onClick={() => setTool(tool === t.id ? 'select' : t.id)}
+              >
+                <span className="tt-icon">{t.icon}</span>
+                <span className="tt-label">{t.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }

@@ -3,7 +3,7 @@
 
 export type Stage = 'network' | 'sections' | 'junctions' | 'detailing' | 'edit' | 'export';
 
-export type Tool = 'select' | 'direct' | 'draw' | 'split' | 'marquee' | 'lasso';
+export type Tool = 'select' | 'direct' | 'draw' | 'split' | 'erase' | 'marquee' | 'lasso';
 
 export type SelectMode = 'replace' | 'add' | 'toggle';
 
