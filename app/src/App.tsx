@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useCst } from './store';
+import { downloadDocument } from './persistence';
 import { NetworkPanel } from './components/NetworkPanel';
 import { SectionsPanel } from './components/SectionsPanel';
 import { CanvasStage } from './components/CanvasStage';
@@ -36,6 +37,15 @@ export default function App() {
   const designOpacity = useCst((s) => s.designOpacity);
   const setDesignOpacity = useCst((s) => s.setDesignOpacity);
   const [panelOpen, setPanelOpen] = useState(true);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const openFile = async (file: File) => {
+    try {
+      useCst.getState().loadDocument(JSON.parse(await file.text()), file.name);
+    } catch {
+      useCst.setState({ statusMsg: `Open failed: ${file.name} is not valid JSON` });
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -98,6 +108,33 @@ export default function App() {
         <TopToolbar />
         <GeocodeSearch />
         <div className="header-actions">
+          <button onClick={() => downloadDocument(useCst.getState())} title="Save the design as a .cst.json file">
+            Save
+          </button>
+          <button onClick={() => fileRef.current?.click()} title="Open a saved .cst.json design">
+            Open
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".json,application/json"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) openFile(f);
+              e.target.value = '';
+            }}
+          />
+          <button
+            onClick={() => {
+              if (window.confirm('Start a new design? The current design will be discarded.')) {
+                useCst.getState().clearAll();
+              }
+            }}
+            title="Clear everything and start a new design"
+          >
+            New
+          </button>
           <label className="opacity-slider" title="Design layer transparency (see the basemap through the plan)">
             <span className="muted small">design</span>
             <input

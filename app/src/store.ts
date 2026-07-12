@@ -40,6 +40,7 @@ import { DEFAULT_FILTERS, fetchOverpassBbox, parseBusStops, parseOsm, toLatLon, 
 import type { BusStopPoint, ImportFilters, LatLon } from './osm/overpass';
 import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
+import { clearAutosave, fromDocument, readAutosave, writeAutosave } from './persistence';
 
 // One shared store across all stages; stage is a UI mode, not a data boundary
 // (Plan v2 §1.1). The graph core (nodes/edges) is the undoable slice.
@@ -155,6 +156,10 @@ interface CstState extends GraphState {
   toggleCornerChamfer: (jKey: string, cornerKey: string) => void;
   setApproachTrim: (jKey: string, approachKey: string, trimM: number | null) => void;
   removeJunctionDesign: (jKey: string) => void;
+  /** Replace the whole design with a saved/restored document (undo history resets). */
+  loadDocument: (raw: unknown, label?: string) => void;
+  /** Start over: empty graph, empty overlays, autosave cleared. */
+  clearAll: () => void;
 }
 
 const EMPTY_DESIGN: JunctionDesign = {
@@ -933,6 +938,68 @@ export const useCst = create<CstState>()(
           delete junctionDesigns[jKey];
           return { junctionDesigns, statusMsg: 'junction overrides removed' };
         }),
+
+      loadDocument: (raw, label = 'design') => {
+        const slice = fromDocument(raw);
+        if (typeof slice === 'string') {
+          set({ statusMsg: `Open failed: ${slice}` });
+          return;
+        }
+        set({
+          ...slice,
+          selectedEdgeId: null,
+          selectedEdgeIds: [],
+          selectedElementId: null,
+          selectedJunctionKey: null,
+          selectedPatchId: null,
+          placeKind: null,
+          patchKind: null,
+          patchDraft: [],
+          draft: [],
+          boxDraw: null,
+          importBox: null,
+          exportBounds: null,
+          reviewList: [],
+          dcCandidates: null,
+          highlightEdges: [],
+          pendingFit: graphBounds(slice),
+          statusMsg: `${label} loaded — ${Object.keys(slice.edges).length} street(s)`,
+        });
+        // A loaded document is a new baseline; undoing past it would resurrect
+        // the previous design's graph under the new origin.
+        useCst.temporal.getState().clear();
+      },
+
+      clearAll: () => {
+        clearAutosave();
+        set({
+          ...EMPTY_GRAPH,
+          // keep origin/basemap: "new design here" rather than losing the anchor
+          junctionDesigns: {},
+          elements: {},
+          nextElementNum: 1,
+          patches: {},
+          nextPatchNum: 1,
+          busStops: [],
+          selectedEdgeId: null,
+          selectedEdgeIds: [],
+          selectedElementId: null,
+          selectedJunctionKey: null,
+          selectedPatchId: null,
+          placeKind: null,
+          patchKind: null,
+          patchDraft: [],
+          draft: [],
+          boxDraw: null,
+          importBox: null,
+          exportBounds: null,
+          reviewList: [],
+          dcCandidates: null,
+          highlightEdges: [],
+          statusMsg: 'new design',
+        });
+        useCst.temporal.getState().clear();
+      },
     }),
     {
       // Only the graph core participates in undo history.
@@ -962,6 +1029,39 @@ export const useCst = create<CstState>()(
 );
 
 export { DEFAULT_IMPORT };
+
+// ── Autosave ──────────────────────────────────────────────────────────────
+// Debounced localStorage mirror of the document slice; restored on load when
+// the session starts empty. Guarded so the store stays importable in node.
+if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+  const restored = readAutosave();
+  if (restored && Object.keys(restored.edges).length > 0) {
+    useCst.setState({
+      ...restored,
+      pendingFit: graphBounds(restored),
+      statusMsg: `restored your last session — ${Object.keys(restored.edges).length} street(s)`,
+    });
+    useCst.temporal.getState().clear();
+  }
+
+  let saveTimer: number | undefined;
+  useCst.subscribe((s, prev) => {
+    // Only document data schedules a save — transient UI churn doesn't.
+    if (
+      s.nodes === prev.nodes &&
+      s.edges === prev.edges &&
+      s.origin === prev.origin &&
+      s.junctionDesigns === prev.junctionDesigns &&
+      s.elements === prev.elements &&
+      s.patches === prev.patches &&
+      s.busStops === prev.busStops
+    ) {
+      return;
+    }
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => writeAutosave(useCst.getState()), 800);
+  });
+}
 
 // Dev-only handle for Playwright drives and console debugging (guard `window`
 // so the store is importable in the node test environment).
