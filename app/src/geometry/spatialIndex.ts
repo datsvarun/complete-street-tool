@@ -52,14 +52,7 @@ function gridFor(edges: Record<string, StreetEdge>): Grid {
   return g;
 }
 
-/** Edge ids whose geometry may lie within `r` of (x, y). Superset (bbox-level);
- *  callers still run the exact projection on the candidates. */
-export function edgesNear(g: GraphState, x: number, y: number, r: number): StreetEdge[] {
-  const grid = gridFor(g.edges);
-  const x0 = Math.floor((x - r) / CELL);
-  const x1 = Math.floor((x + r) / CELL);
-  const y0 = Math.floor((y - r) / CELL);
-  const y1 = Math.floor((y + r) / CELL);
+function collect(g: GraphState, grid: Grid, x0: number, x1: number, y0: number, y1: number): StreetEdge[] {
   const ids = new Set<string>();
   for (let cx = x0; cx <= x1; cx++) {
     for (let cy = y0; cy <= y1; cy++) {
@@ -73,4 +66,38 @@ export function edgesNear(g: GraphState, x: number, y: number, r: number): Stree
     if (e) out.push(e);
   }
   return out;
+}
+
+/** Edge ids whose geometry may lie within `r` of (x, y). Superset (bbox-level);
+ *  callers still run the exact projection on the candidates. */
+export function edgesNear(g: GraphState, x: number, y: number, r: number): StreetEdge[] {
+  const grid = gridFor(g.edges);
+  return collect(
+    g,
+    grid,
+    Math.floor((x - r) / CELL),
+    Math.floor((x + r) / CELL),
+    Math.floor((y - r) / CELL),
+    Math.floor((y + r) / CELL),
+  );
+}
+
+/** Edges whose geometry may intersect the world-rect — the viewport-culling
+ *  query. Same bbox-superset semantics as edgesNear. */
+export function edgesInRect(
+  g: GraphState,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): StreetEdge[] {
+  const grid = gridFor(g.edges);
+  return collect(
+    g,
+    grid,
+    Math.floor(minX / CELL),
+    Math.floor(maxX / CELL),
+    Math.floor(minY / CELL),
+    Math.floor(maxY / CELL),
+  );
 }

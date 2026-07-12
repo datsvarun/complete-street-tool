@@ -12,7 +12,7 @@ import { BasemapFab, ScaleBar, CompassRose } from './FloatingUI';
 import { nodeClassOf } from '../types';
 import type { Boundary, GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { elementGraphics, laneDividers } from '../detailing/elements';
-import { edgesNear } from '../geometry/spatialIndex';
+import { edgesInRect, edgesNear } from '../geometry/spatialIndex';
 import { applyShapeOverrides, deltaForDrag } from '../cad/vertexOverrides';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
@@ -41,6 +41,15 @@ const MIN_SCALE = 0.2;
 const MAX_SCALE = 60;
 const SNAP_PX = 8;       // Plan v2 §2.2: screen-space snap radius
 const NODE_MERGE_PX = 10;
+
+// ── Rendering performance (see ARCHITECTURE §8) ──────────────────────────
+// LOD: below this px/m, fine detail (markings, dividers, furniture, band
+// strokes) is sub-pixel — drawing it costs frames and shows nothing.
+const DETAIL_SCALE = 1.2;
+// Viewport culling kicks in above this edge count (below it, filtering costs
+// more than it saves). Rect padded so small pans don't pop geometry.
+const CULL_MIN_EDGES = 60;
+const CULL_PAD = 0.4; // fraction of the larger viewport dimension
 
 const NODE_COLORS = {
   terminus: '#4CAF50',
@@ -118,6 +127,7 @@ function EdgeShape({
   tool,
   showSections,
   trim,
+  showDetail,
 }: {
   edge: StreetEdge;
   selected: boolean;
@@ -125,6 +135,7 @@ function EdgeShape({
   tool: Tool;
   showSections: boolean;
   trim?: EdgeTrim;
+  showDetail: boolean;
 }) {
   const selectEdge = useCst((s) => s.selectEdge);
   const splitEdgeAt = useCst((s) => s.splitEdgeAt);
@@ -206,9 +217,12 @@ function EdgeShape({
           points={b.polygon}
           closed
           fill={KIND_COLORS[b.kind]}
-          stroke="rgba(30,35,40,0.35)"
+          // LOD: band hairlines are invisible below DETAIL_SCALE; skipping the
+          // stroke pass (and its per-shape transform reset) is a big draw win.
+          stroke={showDetail ? 'rgba(30,35,40,0.35)' : undefined}
           strokeWidth={0.6}
           strokeScaleEnabled={false}
+          perfectDrawEnabled={false}
           onClick={(e) => onBandClick(e, b.key)}
           {...hoverCursor('pointer')}
         />
@@ -221,20 +235,23 @@ function EdgeShape({
           strokeWidth={1}
           dash={[3, 4]}
           strokeScaleEnabled={false}
+          perfectDrawEnabled={false}
           listening={false}
         />
       ))}
-      {markings.map((m) => (
-        <Line
-          key={`${edge.id}-${m.key}`}
-          points={m.line}
-          stroke="#f2f0e9"
-          strokeWidth={1}
-          dash={m.dashed ? [4, 4] : undefined}
-          strokeScaleEnabled={false}
-          listening={false}
-        />
-      ))}
+      {showDetail &&
+        markings.map((m) => (
+          <Line
+            key={`${edge.id}-${m.key}`}
+            points={m.line}
+            stroke="#f2f0e9"
+            strokeWidth={1}
+            dash={m.dashed ? [4, 4] : undefined}
+            strokeScaleEnabled={false}
+            perfectDrawEnabled={false}
+            listening={false}
+          />
+        ))}
       <Line
         points={edge.points}
         stroke={s.stroke}
@@ -257,6 +274,7 @@ function EdgesLayerImpl({
   showSections,
   trims,
   opacity,
+  showDetail,
 }: {
   edges: StreetEdge[];
   selectedEdgeIds: string[];
@@ -265,6 +283,7 @@ function EdgesLayerImpl({
   showSections: boolean;
   trims: Record<string, EdgeTrim>;
   opacity: number;
+  showDetail: boolean;
 }) {
   return (
     <Layer opacity={opacity}>
@@ -277,6 +296,7 @@ function EdgesLayerImpl({
           tool={tool}
           showSections={showSections}
           trim={trims[e.id]}
+          showDetail={showDetail}
         />
       ))}
     </Layer>
@@ -562,7 +582,16 @@ function ElementShapeImpl({
       )}
       {gfx.map((g, gi) =>
         g.shape === 'circle' ? (
-          <Circle key={gi} x={g.x} y={g.y} radius={g.r} fill={g.fill} stroke={g.stroke} strokeWidth={g.strokeWidth} />
+          <Circle
+            key={gi}
+            x={g.x}
+            y={g.y}
+            radius={g.r}
+            fill={g.fill}
+            stroke={g.stroke}
+            strokeWidth={g.strokeWidth}
+            perfectDrawEnabled={false}
+          />
         ) : (
           <Line
             key={gi}
@@ -572,6 +601,7 @@ function ElementShapeImpl({
             stroke={g.stroke}
             strokeWidth={g.strokeWidth ?? 0}
             dash={g.dash}
+            perfectDrawEnabled={false}
           />
         ),
       )}
@@ -589,6 +619,8 @@ function DetailingLayerImpl({
   interactive,
   scale,
   selectedElementId,
+  dividerEdges,
+  showDetail,
 }: {
   elements: StreetElement[];
   edges: Record<string, StreetEdge>;
@@ -596,13 +628,17 @@ function DetailingLayerImpl({
   interactive: boolean;
   scale: number;
   selectedElementId: string | null;
+  dividerEdges: StreetEdge[];
+  showDetail: boolean;
 }) {
   const dividers = useMemo(
     () =>
-      Object.values(edges).flatMap((e) =>
-        laneDividers(e, trims[e.id]).map((pts, i) => ({ key: `${e.id}-lane${i}`, pts })),
-      ),
-    [edges, trims],
+      showDetail
+        ? dividerEdges.flatMap((e) =>
+            laneDividers(e, trims[e.id]).map((pts, i) => ({ key: `${e.id}-lane${i}`, pts })),
+          )
+        : [],
+    [dividerEdges, trims, showDetail],
   );
 
   return (
@@ -616,11 +652,17 @@ function DetailingLayerImpl({
           dash={[3, 4.5]}
           strokeScaleEnabled={false}
           listening={false}
+          perfectDrawEnabled={false}
         />
       ))}
       {elements.map((el) => {
         const edge = edges[el.edgeId];
         if (!edge) return null;
+        // LOD: point furniture and arrows are sub-pixel below DETAIL_SCALE;
+        // crossings/driveways are structural — always shown.
+        if (!showDetail && el.kind !== 'zebra' && el.kind !== 'raisedcrossing' && el.kind !== 'driveway') {
+          return null;
+        }
         return (
           <ElementShape
             key={el.id}
@@ -645,12 +687,14 @@ function ArtifactsLayerImpl({
   selectedJunctionKey,
   designOpacity,
   dimOthers,
+  showDetail,
 }: {
   artifacts: NodeArtifacts;
   stage: string;
   selectedJunctionKey: string | null;
   designOpacity: number;
   dimOthers: boolean;
+  showDetail: boolean;
 }) {
   const selectJunction = useCst((s) => s.selectJunction);
   const vertexOverrides = useCst((s) => s.vertexOverrides);
@@ -667,7 +711,14 @@ function ArtifactsLayerImpl({
     <Layer listening={junctionsStage || editStage} opacity={designOpacity}>
       {artifacts.junctions.flatMap((j) =>
         j.coverBands.map((b, bi) => (
-          <Line key={`${j.nodeIds[0]}-cover${bi}`} points={b} closed fill="#525e6a" listening={false} />
+          <Line
+            key={`${j.nodeIds[0]}-cover${bi}`}
+            points={b}
+            closed
+            fill="#525e6a"
+            listening={false}
+            perfectDrawEnabled={false}
+          />
         )),
       )}
       {artifacts.junctions.map((j) => (
@@ -685,6 +736,7 @@ function ArtifactsLayerImpl({
           }
           strokeWidth={junctionsStage ? (j.key === selectedJunctionKey ? 2 : 1) : 0.6}
           strokeScaleEnabled={false}
+          perfectDrawEnabled={false}
           opacity={dimOthers && j.key !== selectedJunctionKey ? 0.45 : 1}
           onClick={
             junctionsStage
@@ -705,9 +757,10 @@ function ArtifactsLayerImpl({
             points={applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`])}
             closed
             fill={KIND_COLORS[b.kind]}
-            stroke="rgba(30,35,40,0.3)"
+            stroke={showDetail ? 'rgba(30,35,40,0.3)' : undefined}
             strokeWidth={0.5}
             strokeScaleEnabled={false}
+            perfectDrawEnabled={false}
             listening={editStage}
             onClick={
               editStage
@@ -758,9 +811,10 @@ function ArtifactsLayerImpl({
             points={b.polygon}
             closed
             fill={KIND_COLORS[b.kind]}
-            stroke="rgba(30,35,40,0.35)"
+            stroke={showDetail ? 'rgba(30,35,40,0.35)' : undefined}
             strokeWidth={0.6}
             strokeScaleEnabled={false}
+            perfectDrawEnabled={false}
             listening={false}
           />
         )),
@@ -1122,6 +1176,9 @@ export function CanvasStage() {
   const [region, setRegion] = useState<number[] | null>(null);
   const regionRef = useRef<number[] | null>(null);
   const centeredRef = useRef(false);
+  const coordsRef = useRef<HTMLDivElement>(null);
+  const pendingViewRef = useRef<{ x: number; y: number } | null>(null);
+  const viewRafRef = useRef<number | null>(null);
 
   const stage = useCst((s) => s.stage);
   const tool = useCst((s) => s.tool);
@@ -1159,6 +1216,48 @@ export function CanvasStage() {
   const nodeList = useMemo(() => Object.values(nodes), [nodes]);
   const elementList = useMemo(() => Object.values(elements), [elements]);
   const patchList = useMemo(() => Object.values(patches), [patches]);
+
+  // ── Viewport culling + LOD (perf: only mount what the view can show) ──
+  const showDetail = view.scale >= DETAIL_SCALE;
+  // Quantize the camera for culling: the cull rect only changes on
+  // quarter-viewport pan steps / half-octave zoom steps, so the culled arrays
+  // keep their identity while panning — otherwise every drag frame would
+  // reconcile every Konva node. The pad covers the quantization slack.
+  const qw = size.width * 0.25 || 1;
+  const qh = size.height * 0.25 || 1;
+  const qx = Math.round(view.x / qw) * qw;
+  const qy = Math.round(view.y / qh) * qh;
+  const qs = Math.pow(2, Math.floor(Math.log2(view.scale) * 2) / 2); // ≤ scale → superset viewport
+  const viewRect = useMemo(() => {
+    if (size.width === 0) return null;
+    const x0 = -qx / qs;
+    const y0 = -qy / qs;
+    const w = size.width / qs;
+    const h = size.height / qs;
+    const pad = Math.max(w, h) * CULL_PAD;
+    return { minX: x0 - pad, minY: y0 - pad, maxX: x0 + w + pad, maxY: y0 + h + pad };
+  }, [qx, qy, qs, size]);
+  const visibleEdges = useMemo(() => {
+    if (!viewRect || edgeList.length <= CULL_MIN_EDGES) return edgeList;
+    return edgesInRect(
+      { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 },
+      viewRect.minX,
+      viewRect.minY,
+      viewRect.maxX,
+      viewRect.maxY,
+    );
+  }, [viewRect, edgeList, nodes, edges]);
+  const visibleElements = useMemo(() => {
+    if (visibleEdges === edgeList) return elementList;
+    const ids = new Set(visibleEdges.map((e) => e.id));
+    return elementList.filter((el) => ids.has(el.edgeId));
+  }, [visibleEdges, edgeList, elementList]);
+  const visibleNodes = useMemo(() => {
+    if (stage !== 'network' || !viewRect || nodeList.length <= CULL_MIN_EDGES) return nodeList;
+    return nodeList.filter(
+      (n) => n.x >= viewRect.minX && n.x <= viewRect.maxX && n.y >= viewRect.minY && n.y <= viewRect.maxY,
+    );
+  }, [stage, viewRect, nodeList]);
   const boundaryList = useMemo(() => Object.values(boundaries), [boundaries]);
   // Only the network stage renders nodes — don't pay O(nodes × edges) elsewhere.
   const degrees = useMemo(() => {
@@ -1182,6 +1281,21 @@ export function CanvasStage() {
     stage === 'junctions' && selectedJunctionKey
       ? artifacts.junctions.find((j) => j.key === selectedJunctionKey) ?? null
       : null;
+
+  // Culled artifact view for rendering (derivation itself is uncut — trims
+  // must stay complete for ribbon geometry).
+  const visibleArtifacts = useMemo(() => {
+    if (!viewRect || artifacts.junctions.length <= 40) return artifacts;
+    const inRect = (x: number, y: number) =>
+      x >= viewRect.minX && x <= viewRect.maxX && y >= viewRect.minY && y <= viewRect.maxY;
+    return {
+      junctions: artifacts.junctions.filter((j) => inRect(j.polygon[0], j.polygon[1])),
+      transitions: artifacts.transitions.filter(
+        (t) => t.bands[0] && inRect(t.bands[0].polygon[0], t.bands[0].polygon[1]),
+      ),
+      trims: artifacts.trims,
+    };
+  }, [artifacts, viewRect]);
 
   // Base (pre-override) outline of the generated shape being vertex-edited.
   const selectedShapeBase = useMemo(() => {
@@ -1396,7 +1510,13 @@ export function CanvasStage() {
       }
     }
     const c = constrain(w, e.evt.shiftKey);
-    setCursor(c);
+    // The coords pill updates imperatively — a React state set per mousemove
+    // would re-render the whole canvas component at pointer frequency.
+    if (coordsRef.current) coordsRef.current.textContent = `${c.x.toFixed(1)}, ${c.y.toFixed(1)} m`;
+    // Cursor STATE only feeds the live drawing previews — keep React out of
+    // the loop whenever no preview is on screen.
+    if (tool === 'draw' || boundaryDraw || (stage === 'edit' && patchKind)) setCursor(c);
+    else if (cursor) setCursor(null);
     if (tool === 'draw') {
       setSnap(findSnap(c.x, c.y, SNAP_PX / view.scale, nodes, edges));
     } else if (snap) {
@@ -1505,13 +1625,24 @@ export function CanvasStage() {
         scaleY={view.scale}
         draggable={(tool === 'select' || tool === 'direct') && !boxDraw}
         onDragMove={(e) => {
-          // live view sync while panning so the basemap tracks the drag
+          // Konva moves the stage natively; React only needs the view for the
+          // basemap + culling — sync at most once per animation frame.
           if (e.target === e.target.getStage()) {
-            setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }));
+            const x = e.target.x();
+            const y = e.target.y();
+            pendingViewRef.current = { x, y };
+            if (viewRafRef.current === null) {
+              viewRafRef.current = requestAnimationFrame(() => {
+                viewRafRef.current = null;
+                const p = pendingViewRef.current;
+                if (p) setView((v) => ({ ...v, x: p.x, y: p.y }));
+              });
+            }
           }
         }}
         onDragEnd={(e) => {
           if (e.target === e.target.getStage()) {
+            pendingViewRef.current = null;
             setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }));
           }
         }}
@@ -1525,28 +1656,30 @@ export function CanvasStage() {
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
         {showSections && (
           <ArtifactsLayer
-            artifacts={artifacts}
+            artifacts={visibleArtifacts}
             stage={stage}
             selectedJunctionKey={selectedJunctionKey}
             designOpacity={designOpacity}
             dimOthers={!!focusedJunction}
+            showDetail={showDetail}
           />
         )}
         <EdgesLayer
-          edges={edgeList}
+          edges={visibleEdges}
           selectedEdgeIds={selectedEdgeIds}
           highlightEdges={highlightEdges}
           tool={tool}
           showSections={showSections}
           trims={artifacts.trims}
           opacity={showSections ? designOpacity : 1}
+          showDetail={showDetail}
         />
         {stage === 'network' && (
-          <VerticesLayer edges={edgeList} scale={view.scale} draggable={tool === 'direct'} />
+          <VerticesLayer edges={visibleEdges} scale={view.scale} draggable={tool === 'direct'} />
         )}
         {stage === 'network' && (
           <NodesLayer
-            nodes={nodeList}
+            nodes={visibleNodes}
             degrees={degrees}
             scale={view.scale}
             draggable={tool === 'direct'}
@@ -1574,12 +1707,14 @@ export function CanvasStage() {
         )}
         {showSections && Object.keys(elements).length > 0 && (
           <DetailingLayer
-            elements={elementList}
+            elements={visibleElements}
             edges={edges}
+            dividerEdges={visibleEdges}
             trims={artifacts.trims}
             interactive={stage === 'detailing'}
             scale={view.scale}
             selectedElementId={selectedElementId}
+            showDetail={showDetail}
           />
         )}
         <Layer listening={false}>
@@ -1700,9 +1835,7 @@ export function CanvasStage() {
       </div>
       <CompassRose />
       <div className="overlay hint-pill">{hint}</div>
-      <div className="overlay coords-pill">
-        {cursor ? `${cursor.x.toFixed(1)}, ${cursor.y.toFixed(1)} m` : ''}
-      </div>
+      <div className="overlay coords-pill" ref={coordsRef} />
     </div>
   );
 }

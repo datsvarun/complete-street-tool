@@ -243,6 +243,40 @@ DetailingLayer                   lane dividers + element symbols; drag re-
 overlay layer                    draft polyline, snap ring, marquee/lasso
 ```
 
+### Rendering performance model (do not regress)
+
+Measured on the dense benchmark (sample network + sections + every
+auto-suggestion ≈ 1,200 elements): full-scene draw went **1,528 ms → ~12 ms**
+and pan from 1.8 fps to frame rate by layering four rules — all live in
+`CanvasStage.tsx` (constants at the top):
+
+1. **LOD (`DETAIL_SCALE`, px/m):** below it, sub-pixel detail is *not
+   mounted* — ribbon separator markings, lane dividers, point furniture and
+   turn arrows, band/wedge hairline strokes. Crossings, driveways, band and
+   junction fills always render (they are the plan). Dashed strokes are the
+   single most expensive canvas primitive — never add an always-on dashed
+   layer without an LOD gate.
+2. **Viewport culling:** above `CULL_MIN_EDGES`, only edges/nodes/elements/
+   junction artifacts inside the padded view rect are mounted
+   (`spatialIndex.edgesInRect`). The cull rect is **quantized** to
+   quarter-viewport pan steps and half-octave zoom buckets so the culled
+   arrays keep identity during a drag — otherwise every frame reconciles
+   every Konva node. Padding (`CULL_PAD`) covers the quantization slack.
+   Derivation (`deriveNodeArtifactsCached`) is never culled — trims must stay
+   complete; only the *rendered* artifact view is filtered.
+3. **React off the pointer path:** the coords pill updates via a ref
+   (`textContent`), `setCursor` state only flows while a drawing preview is
+   live, and stage-drag → `setView` is rAF-throttled (Konva moves the stage
+   natively; React only feeds the basemap + culling).
+4. **Konva hygiene:** `perfectDrawEnabled={false}` on every fill shape,
+   `listening` scoped per stage (a listening shape is drawn twice — scene +
+   hit canvas), `strokeScaleEnabled` strokes skipped entirely below LOD.
+
+Benchmark before touching any of this: `scratchpad perf-bench` pattern —
+count `stage.find('Shape')`, time 20 × `stage.draw()`, and rAF-count a real
+mouse-drag. Remaining known cost: MapLibre re-render per pan frame is ~free
+on GPUs but dominates under software GL (headless containers).
+
 Interaction notes (hard-won — do not "simplify" these away):
 - **Konva synthesizes dblclick** from any two clicks within its time window
   regardless of distance. Draw-finish therefore requires the last two draft
