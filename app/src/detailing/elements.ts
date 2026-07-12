@@ -13,6 +13,7 @@ import type {
   StreetElement,
 } from '../types';
 import { refFraction } from '../geometry/ribbon';
+import { edgesNear } from '../geometry/spatialIndex';
 import { DRIVABLE_KINDS } from '../catalog';
 import { pointAtStation, polylineLength, projectOnPolyline, subPolyline, offsetPolyline, toPts, toFlat } from '../geometry/polyline';
 
@@ -139,7 +140,8 @@ export function resolveOnEdge(edge: StreetEdge, kind: ElementKind, wx: number, w
  *  still resolves to that edge. */
 export function resolveDrop(g: GraphState, kind: ElementKind, wx: number, wy: number, tolM: number): Placement | null {
   let best: { p: Placement; d: number } | null = null;
-  for (const e of Object.values(g.edges)) {
+  // 60 m covers the widest catalog ROW's half-width beyond the centerline.
+  for (const e of edgesNear(g, wx, wy, tolM + 60)) {
     if (!e.section) continue;
     const proj = projectOnPolyline(e.points, wx, wy);
     if (!proj) continue;

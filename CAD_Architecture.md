@@ -1,6 +1,20 @@
-# CST — CAD Editing Architecture (design, not yet built)
+# CST — CAD Editing Architecture
 
-**Status:** design document. Defines how CST becomes a CAD-grade editor —
+**Status: core shipped.** P1 (spatial index + unified snapping —
+`geometry/spatialIndex.ts`, `findSnap`/`resolveDrop` now query local
+candidates, draw snaps to nodes *and* interior vertices) and P3/P4/P5 (the
+keyed-vertex override engine — `cad/vertexOverrides.ts`, `vertexOverrides`
+store slice, Edit-stage shape selection + vertex handles, export
+integration) are implemented. **Implementation note:** vertex keys landed as
+*perimeter-fraction keys per shape* (`band:{edgeId}:{bandKey}`,
+`jring:{jKey}`, `jband:{jKey}:{bandKey}` + fraction `0.xxxx`) with deltas in
+the *outline's* local tangent/normal frame — one generic scheme instead of
+the per-family schemes sketched in §2; §2's failure-mode analysis still
+applies (fractions survive resampling; unmatched keys skip). **Still open:**
+P2 (the generic `<HandleLayer>` refactor of the five bespoke drag handlers —
+§5, unchanged below) and P6 measurement tools.
+
+Defines how CST becomes a CAD-grade editor —
 node-level control over *every* generated shape — without abandoning the
 "derived, not stored" rule that makes the whole app coherent
 (`ARCHITECTURE.md` §2). Read `ARCHITECTURE.md` first.

@@ -23,17 +23,22 @@ deploy:pages` then push (GitHub Pages, deploy-from-branch).
 | 3 · Detailing (furniture, markings, crossings, lane dividers, suggest) | **shipped** |
 | 3.5 · Edit (free-form material patches + cuts, vertex editing) | **shipped** |
 | 4 · Export (scaled SVG plan, print-to-PDF, extent crop) | **shipped** |
-| Floating map-app UI, top toolbar, Direct tool, marquee/lasso | **shipped** |
-| Bbox OSM import, export extent | **shipped** |
-| vitest engine suite (14 tests) | **shipped** |
-| **Persistence** (save/open/autosave) | **not started** — biggest product gap |
-| **CAD node-editing of derived geometry** | **not started** — see `CAD_Architecture.md` |
-| Junctions J5–J7 (templates, roundabout, probe/validation) | **not started** |
+| Floating map-app UI, top toolbar (grouped + Delete tool), Direct tool, marquee/lasso | **shipped** |
+| Bbox OSM import + filters (flyovers/service/paths) + bus-stop layer, export extent | **shipped** |
+| **Persistence** (save/open `.cst.json`, autosave/restore) | **shipped** |
+| Plot/ROW **boundary tracing** (network stage, persisted, exported) | **shipped** |
+| Detailing auto-generate (zebras @ approaches, bus stops from OSM, lane counts) | **shipped** |
+| Junction form Regular/Roundabout/Custom + roundabout preview geometry | **shipped** |
+| **CAD P1** spatial index + unified snapping | **shipped** |
+| **CAD P3–P5** keyed-vertex overrides, Edit-stage node editing of generated geometry | **shipped** |
+| vitest engine suite (32 tests) | **shipped** |
+| CAD P2 generic `<HandleLayer>` refactor | **not started** — next structural cleanup |
+| Junctions J5–J7 (signal/priority templates, full roundabout, probe/validation) | **not started** |
 | Detailing depth (element properties, signs, signals) | **partial** |
 
-The app is a coherent end-to-end pipeline. The two highest-value next
-investments are **persistence** (a refresh currently loses everything) and the
-**CAD keyed-vertex layer** (the user's node-based-control ask).
+The app is a coherent end-to-end pipeline with save/open and CAD node-level
+editing of every generated surface (see `CAD_Architecture.md` status header
+for what shipped vs. the original sketch).
 
 ---
 
@@ -41,37 +46,30 @@ investments are **persistence** (a refresh currently loses everything) and the
 
 Ordered by leverage. Do them top-down unless a specific need reorders them.
 
-### P0 — Persistence MVP  *(small, protects all future work)*
-Currently client-only with no save. The undoable slice is already exactly the
-serializable document.
-- Autosave the undoable slice to `localStorage` (debounced); restore on load.
-- Save / Open `.cst.json` (schema = graph + origin + junctionDesigns +
-  elements + patches + version). Version the schema from day one.
-- "New / clear" with confirm.
-- **Done-when:** draw → refresh → design intact; save file → reopen → identical.
-- *Files:* new `store` actions `serialize`/`load`/`clear`; a small
-  `persistence.ts`; hook autosave in `store.ts`; buttons in the header.
+### ~~P0 — Persistence MVP~~ ✅ shipped
+`persistence.ts` + store `loadDocument`/`clearAll` + header Save/Open/New +
+debounced autosave/restore. Document now also carries boundaries and
+vertexOverrides.
 
-### P1 — CAD foundation: spatial index + unified snapping  *(unblocks CAD + scale)*
-See `CAD_Architecture.md` §6. `findSnap`/`resolveDrop` are O(edges) scans.
-- Uniform-grid or quadtree index rebuilt per graph snapshot.
-- Snapping service: grid + endpoint + vertex + edge, shared by all tools.
-- **Done-when:** 1000-edge import stays smooth on node drag/draw; draw snaps to
-  vertices and edges, not just nodes.
+### ~~P1 — CAD foundation: spatial index + unified snapping~~ ✅ shipped
+`geometry/spatialIndex.ts` (uniform grid, memoized per edges identity);
+`findSnap` (now also snaps interior vertices), `resolveDrop`, and node-drag
+snapping all query local candidates.
 
 ### P2 — CAD: generic handle layer  *(pure refactor, big payoff)*
-`CAD_Architecture.md` §5. Collapse the five bespoke drag handlers
+`CAD_Architecture.md` §5. Collapse the — now six — bespoke drag handlers
 (`NodesLayer`, `VerticesLayer`, `JunctionHandlesLayer`, `PatchesLayer`
-vertices, `ElementShape`) into one `<HandleLayer>` + `useHandleDrag`.
+vertices, `ElementShape`, `ShapeEditLayer`) into one `<HandleLayer>` +
+`useHandleDrag`.
 - **Done-when:** no behaviour change; existing Playwright drives still green;
   the `setAttr('dragFrom')` debt (ARCHITECTURE §11.7) is gone.
 
-### P3 — CAD: keyed-vertex overrides  *(the node-based-control ask)*
-`CAD_Architecture.md` §2–4. `vertexKeys` on derived polygons; a
-`vertexOverrides` store slice applied in the local frame; `pruneVertexOverrides`;
-Direct tool grabs any vertex of any generated shape.
-- **Done-when:** drag a ribbon-band vertex or a fillet-arc vertex, edit the
-  graph, and the nudge rides along; deleting the edge drops the override.
+### ~~P3 — CAD: keyed-vertex overrides~~ ✅ shipped (perimeter-fraction variant)
+`cad/vertexOverrides.ts` + `vertexOverrides` store slice + Edit-stage shape
+selection/vertex handles + export integration. Stale keys skip silently; the
+Edit panel lists edited shapes with per-shape reset (there is no automatic
+`pruneVertexOverrides` sweep yet — overrides whose shape vanished linger
+harmlessly in the document until reset).
 
 ### P4 — Junctions J5: priority + signalized templates
 `Junction_Tool_Design.md` §5, consumes the J4 movement graph.

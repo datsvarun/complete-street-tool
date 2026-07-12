@@ -18,6 +18,10 @@ const PATCH_KINDS: PatchKind[] = [
 
 export function EditPanel() {
   const patches = useCst((s) => s.patches);
+  const vertexOverrides = useCst((s) => s.vertexOverrides);
+  const selectedShapeKey = useCst((s) => s.selectedShapeKey);
+  const selectShape = useCst((s) => s.selectShape);
+  const clearShapeOverrides = useCst((s) => s.clearShapeOverrides);
   const patchKind = useCst((s) => s.patchKind);
   const setPatchKind = useCst((s) => s.setPatchKind);
   const patchDraft = useCst((s) => s.patchDraft);
@@ -45,6 +49,42 @@ export function EditPanel() {
         the canvas, Enter or double-click to close. Drag vertices to refine;
         right-click a vertex removes it, right-click a patch deletes it.
       </p>
+
+      <h3>Node editing</h3>
+      <p className="muted small">
+        Click any <strong>generated</strong> surface (band, junction, wedge) to
+        outline it, then drag its nodes. Nudges are stored parametrically — they
+        ride along when the street moves or resizes, and drop out if their shape
+        disappears. Right-click a node resets it.
+      </p>
+      {selectedShapeKey && (
+        <p className="small">
+          Editing <strong>{selectedShapeKey}</strong>{' '}
+          <button className="mini" onClick={() => selectShape(null)}>
+            done
+          </button>
+        </p>
+      )}
+      {Object.keys(vertexOverrides).length > 0 && (
+        <>
+          <h3>Edited shapes ({Object.keys(vertexOverrides).length})</h3>
+          <ul className="edge-list">
+            {Object.entries(vertexOverrides).map(([key, ov]) => (
+              <li key={key} className="row-between small">
+                <button
+                  className={key === selectedShapeKey ? 'active' : ''}
+                  onClick={() => selectShape(key)}
+                >
+                  {key} · {Object.keys(ov).length} node(s)
+                </button>
+                <button className="mini" title="reset to generated geometry" onClick={() => clearShapeOverrides(key)}>
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <h3>Material</h3>
       <div className="palette">

@@ -12,6 +12,8 @@ import { BasemapFab, ScaleBar, CompassRose } from './FloatingUI';
 import { nodeClassOf } from '../types';
 import type { Boundary, GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { elementGraphics, laneDividers } from '../detailing/elements';
+import { edgesNear } from '../geometry/spatialIndex';
+import { applyShapeOverrides, deltaForDrag } from '../cad/vertexOverrides';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { EdgeTrim, JunctionPoly, NodeArtifacts } from '../graph/junctions';
@@ -127,10 +129,23 @@ function EdgeShape({
   const selectEdge = useCst((s) => s.selectEdge);
   const splitEdgeAt = useCst((s) => s.splitEdgeAt);
   const section = edge.section;
-  const { bands, markings } = useMemo(
+  const { bands: baseBands, markings } = useMemo(
     () => (showSections ? buildEdgeGeometry(edge, trim) : { bands: [], markings: [] }),
     [edge, showSections, trim],
   );
+  // CAD vertex overrides (whole record — its reference only changes when an
+  // override changes). Untouched edges keep their memoized baseBands identity.
+  const allOverrides = useCst((s) => s.vertexOverrides);
+  const bands = useMemo(() => {
+    let touched = false;
+    const out = baseBands.map((b) => {
+      const ov = allOverrides[`band:${edge.id}:${b.key}`];
+      if (!ov) return b;
+      touched = true;
+      return { ...b, polygon: applyShapeOverrides(b.polygon, ov) };
+    });
+    return touched ? out : baseBands;
+  }, [baseBands, allOverrides, edge.id]);
   // Network view: dotted ROW outlines so the section stays referenceable
   // while editing the graph.
   const outline = useMemo(() => {
@@ -171,6 +186,18 @@ function EdgeShape({
   };
   const s = edgeStroke(edge, selected, highlighted, showSections && !!section);
 
+  // Edit stage: clicking a generated band selects it for vertex editing.
+  const onBandClick = (e: KonvaEventObject<MouseEvent>, bandKey: string) => {
+    const st = useCst.getState();
+    if (st.stage === 'edit' && !st.patchKind && !st.boundaryDraw && !st.boxDraw) {
+      e.cancelBubble = true;
+      st.selectShape(`band:${edge.id}:${bandKey}`);
+      st.selectPatch(null);
+      return;
+    }
+    onClick(e);
+  };
+
   return (
     <>
       {bands.map((b) => (
@@ -182,7 +209,7 @@ function EdgeShape({
           stroke="rgba(30,35,40,0.35)"
           strokeWidth={0.6}
           strokeScaleEnabled={false}
-          onClick={onClick}
+          onClick={(e) => onBandClick(e, b.key)}
           {...hoverCursor('pointer')}
         />
       ))}
@@ -278,10 +305,17 @@ function NodesLayerImpl({
   const snapUnderDrag = (nodeId: string, x: number, y: number) => {
     const tol = NODE_MERGE_PX / scale;
     const state = useCst.getState();
-    for (const m of Object.values(state.nodes)) {
-      if (m.id !== nodeId && dist(m.x, m.y, x, y) < tol) return { x: m.x, y: m.y, kind: 'node' as const };
+    const g = { nodes: state.nodes, edges: state.edges, nextNodeNum: 0, nextEdgeNum: 0 };
+    const cands = edgesNear(g, x, y, tol);
+    for (const e of cands) {
+      for (const nid of [e.a, e.b]) {
+        const m = state.nodes[nid];
+        if (m && m.id !== nodeId && dist(m.x, m.y, x, y) < tol) {
+          return { x: m.x, y: m.y, kind: 'node' as const };
+        }
+      }
     }
-    for (const e of Object.values(state.edges)) {
+    for (const e of cands) {
       if (e.a === nodeId || e.b === nodeId) continue;
       const proj = projectOnPolyline(e.points, x, y);
       if (proj && proj.dist < tol) return { x: proj.x, y: proj.y, kind: 'edge' as const };
@@ -420,6 +454,8 @@ function VerticesLayerImpl({
 }
 const VerticesLayer = memo(VerticesLayerImpl);
 
+/** Unified snap over the spatial index: node endpoints, then interior polyline
+ *  vertices, then edge projections — all from local candidates only (P1). */
 function findSnap(
   wx: number,
   wy: number,
@@ -427,17 +463,37 @@ function findSnap(
   nodes: Record<string, GraphNode>,
   edges: Record<string, StreetEdge>,
 ): Snap | null {
+  const g = { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 };
+  const cands = edgesNear(g, wx, wy, tol);
   let best: Snap | null = null;
   let bestD = tol;
-  for (const n of Object.values(nodes)) {
-    const d = dist(n.x, n.y, wx, wy);
-    if (d < bestD) {
-      bestD = d;
-      best = { type: 'node', id: n.id, x: n.x, y: n.y };
+  const seen = new Set<string>();
+  for (const e of cands) {
+    for (const nid of [e.a, e.b]) {
+      if (seen.has(nid)) continue;
+      seen.add(nid);
+      const n = nodes[nid];
+      if (!n) continue;
+      const d = dist(n.x, n.y, wx, wy);
+      if (d < bestD) {
+        bestD = d;
+        best = { type: 'node', id: n.id, x: n.x, y: n.y };
+      }
     }
   }
   if (best) return best;
-  for (const e of Object.values(edges)) {
+  for (const e of cands) {
+    // interior vertices snap like edge points (drafts split there exactly)
+    for (let i = 2; i + 3 < e.points.length; i += 2) {
+      const d = dist(e.points[i], e.points[i + 1], wx, wy);
+      if (d < bestD) {
+        bestD = d;
+        best = { type: 'edge', id: e.id, x: e.points[i], y: e.points[i + 1] };
+      }
+    }
+  }
+  if (best) return best;
+  for (const e of cands) {
     const proj = projectOnPolyline(e.points, wx, wy);
     if (proj && proj.dist < bestD) {
       bestD = proj.dist;
@@ -597,9 +653,18 @@ function ArtifactsLayerImpl({
   dimOthers: boolean;
 }) {
   const selectJunction = useCst((s) => s.selectJunction);
+  const vertexOverrides = useCst((s) => s.vertexOverrides);
   const junctionsStage = stage === 'junctions';
+  const editStage = stage === 'edit';
+  const selectShape = (key: string) => {
+    const st = useCst.getState();
+    if (st.patchKind || st.boundaryDraw || st.boxDraw) return false;
+    st.selectShape(key);
+    st.selectPatch(null);
+    return true;
+  };
   return (
-    <Layer listening={junctionsStage} opacity={designOpacity}>
+    <Layer listening={junctionsStage || editStage} opacity={designOpacity}>
       {artifacts.junctions.flatMap((j) =>
         j.coverBands.map((b, bi) => (
           <Line key={`${j.nodeIds[0]}-cover${bi}`} points={b} closed fill="#525e6a" listening={false} />
@@ -608,7 +673,7 @@ function ArtifactsLayerImpl({
       {artifacts.junctions.map((j) => (
         <Line
           key={j.key}
-          points={j.polygon}
+          points={applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`])}
           closed
           fill="#525e6a"
           stroke={
@@ -621,21 +686,37 @@ function ArtifactsLayerImpl({
           strokeWidth={junctionsStage ? (j.key === selectedJunctionKey ? 2 : 1) : 0.6}
           strokeScaleEnabled={false}
           opacity={dimOthers && j.key !== selectedJunctionKey ? 0.45 : 1}
-          onClick={junctionsStage ? () => selectJunction(j.key) : undefined}
-          {...(junctionsStage ? hoverCursor('pointer') : {})}
+          onClick={
+            junctionsStage
+              ? () => selectJunction(j.key)
+              : editStage
+                ? (e) => {
+                    if (selectShape(`jring:${j.key}`)) e.cancelBubble = true;
+                  }
+                : undefined
+          }
+          {...(junctionsStage || editStage ? hoverCursor('pointer') : {})}
         />
       ))}
       {artifacts.junctions.flatMap((j) =>
         [...j.wedges, ...j.noses].map((b) => (
           <Line
             key={`${j.nodeIds[0]}-${b.key}`}
-            points={b.polygon}
+            points={applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`])}
             closed
             fill={KIND_COLORS[b.kind]}
             stroke="rgba(30,35,40,0.3)"
             strokeWidth={0.5}
             strokeScaleEnabled={false}
-            listening={false}
+            listening={editStage}
+            onClick={
+              editStage
+                ? (e) => {
+                    if (selectShape(`jband:${j.key}:${b.key}`)) e.cancelBubble = true;
+                  }
+                : undefined
+            }
+            {...(editStage ? hoverCursor('pointer') : {})}
           />
         )),
       )}
@@ -862,6 +943,68 @@ function BoundariesLayerImpl({
 }
 const BoundariesLayer = memo(BoundariesLayerImpl);
 
+/** CAD vertex editing (Edit stage): every vertex of the selected generated
+ *  shape becomes a handle. Drags store parametric (along, across) deltas by
+ *  perimeter-fraction key — the geometry itself stays derived. Right-click a
+ *  vertex resets its nudge. */
+function ShapeEditLayer({ shapeKey, base, scale }: { shapeKey: string; base: number[]; scale: number }) {
+  const vertexOverrides = useCst((s) => s.vertexOverrides);
+  const setVertexDelta = useCst((s) => s.setVertexDelta);
+  const removeVertexDelta = useCst((s) => s.removeVertexDelta);
+  const display = applyShapeOverrides(base, vertexOverrides[shapeKey]);
+  const r = 4 / scale;
+  const n = display.length / 2;
+  const dragTo = (i: number, wx: number, wy: number) => {
+    const { key, delta } = deltaForDrag(base, useCst.getState().vertexOverrides[shapeKey], i, wx, wy);
+    setVertexDelta(shapeKey, key, delta);
+  };
+  return (
+    <Layer>
+      <Line
+        points={display}
+        closed
+        stroke="#e08e45"
+        strokeWidth={1.6}
+        dash={[5, 3]}
+        strokeScaleEnabled={false}
+        listening={false}
+      />
+      {Array.from({ length: n }, (_, i) => (
+        <Circle
+          key={i}
+          x={display[i * 2]}
+          y={display[i * 2 + 1]}
+          radius={r}
+          fill="#fff"
+          stroke="#b3541e"
+          strokeWidth={1.5}
+          strokeScaleEnabled={false}
+          draggable
+          {...hoverCursor('move')}
+          onDragStart={() => useCst.temporal.getState().pause()}
+          onDragMove={(ev) => dragTo(i, ev.target.x(), ev.target.y())}
+          onDragEnd={(ev) => {
+            useCst.temporal.getState().resume();
+            dragTo(i, ev.target.x(), ev.target.y());
+          }}
+          onContextMenu={(ev) => {
+            ev.evt.preventDefault();
+            ev.cancelBubble = true;
+            const { key } = deltaForDrag(
+              base,
+              useCst.getState().vertexOverrides[shapeKey],
+              i,
+              base[i * 2],
+              base[i * 2 + 1],
+            );
+            removeVertexDelta(shapeKey, key);
+          }}
+        />
+      ))}
+    </Layer>
+  );
+}
+
 const TURN_COLORS: Record<string, string> = {
   through: '#4a90d9',
   left: '#4CAF50',
@@ -994,6 +1137,7 @@ export function CanvasStage() {
   const placeKind = useCst((s) => s.placeKind);
   const selectedElementId = useCst((s) => s.selectedElementId);
   const patches = useCst((s) => s.patches);
+  const selectedShapeKey = useCst((s) => s.selectedShapeKey);
   const boundaries = useCst((s) => s.boundaries);
   const boundaryDraw = useCst((s) => s.boundaryDraw);
   const boundaryDraft = useCst((s) => s.boundaryDraft);
@@ -1038,6 +1182,31 @@ export function CanvasStage() {
     stage === 'junctions' && selectedJunctionKey
       ? artifacts.junctions.find((j) => j.key === selectedJunctionKey) ?? null
       : null;
+
+  // Base (pre-override) outline of the generated shape being vertex-edited.
+  const selectedShapeBase = useMemo(() => {
+    if (stage !== 'edit' || !selectedShapeKey) return null;
+    if (selectedShapeKey.startsWith('band:')) {
+      const [, edgeId, ...rest] = selectedShapeKey.split(':');
+      const e = edges[edgeId];
+      if (!e?.section) return null;
+      const bandKey = rest.join(':');
+      const { bands } = buildEdgeGeometry(e, artifacts.trims[edgeId]);
+      return bands.find((b) => b.key === bandKey)?.polygon ?? null;
+    }
+    if (selectedShapeKey.startsWith('jring:')) {
+      const jKey = selectedShapeKey.slice('jring:'.length);
+      return artifacts.junctions.find((j) => j.key === jKey)?.polygon ?? null;
+    }
+    if (selectedShapeKey.startsWith('jband:')) {
+      const [, jKey, ...rest] = selectedShapeKey.split(':');
+      const bandKey = rest.join(':');
+      const j = artifacts.junctions.find((x) => x.key === jKey);
+      if (!j) return null;
+      return [...j.wedges, ...j.noses].find((b) => b.key === bandKey)?.polygon ?? null;
+    }
+    return null;
+  }, [stage, selectedShapeKey, edges, artifacts]);
 
   useEffect(() => {
     const el = containerRef.current!;
@@ -1200,8 +1369,10 @@ export function CanvasStage() {
       if (w) useCst.getState().placeElementAt(w.x, w.y, 40 / view.scale);
     } else if (tool === 'select' && e.target === stageNode) {
       if (stage === 'detailing') useCst.getState().selectElement(null);
-      else if (stage === 'edit') useCst.getState().selectPatch(null);
-      else if (stage === 'junctions') selectJunction(null);
+      else if (stage === 'edit') {
+        useCst.getState().selectPatch(null);
+        useCst.getState().selectShape(null);
+      } else if (stage === 'junctions') selectJunction(null);
       else useCst.getState().selectEdge(null);
     }
   };
@@ -1282,7 +1453,9 @@ export function CanvasStage() {
       : 'Pick an element from the palette, or drag/right-click existing ones · Esc deselects tool',
     edit: patchKind
       ? `Click to add ${patchKind} patch vertices · Enter/double-click closes · Esc cancels`
-      : 'Pick a material to draw a patch, or click a patch to edit its vertices',
+      : selectedShapeKey
+        ? 'Drag any node of the outlined shape · right-click a node resets it · Esc deselects'
+        : 'Click any generated surface to edit its nodes, or pick a material to draw a patch',
     export: 'Set up the title block in the panel, then print or download the plan',
   };
   const hint = boxDraw
@@ -1388,6 +1561,9 @@ export function CanvasStage() {
           />
         )}
         {focusedJunction && <JunctionHandlesLayer j={focusedJunction} scale={view.scale} />}
+        {stage === 'edit' && selectedShapeKey && selectedShapeBase && (
+          <ShapeEditLayer shapeKey={selectedShapeKey} base={selectedShapeBase} scale={view.scale} />
+        )}
         {showSections && patchList.length > 0 && (
           <PatchesLayer
             patches={patchList}

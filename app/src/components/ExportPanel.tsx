@@ -11,6 +11,7 @@ export function ExportPanel() {
   const elements = useCst((s) => s.elements);
   const patches = useCst((s) => s.patches);
   const boundaries = useCst((s) => s.boundaries);
+  const vertexOverrides = useCst((s) => s.vertexOverrides);
   const exportBounds = useCst((s) => s.exportBounds);
   const boxDraw = useCst((s) => s.boxDraw);
   const setBoxDraw = useCst((s) => s.setBoxDraw);
@@ -30,8 +31,9 @@ export function ExportPanel() {
         Object.values(elements),
         Object.values(patches),
         Object.values(boundaries),
+        vertexOverrides,
       ),
-    [nodes, edges, junctionDesigns, elements, patches, boundaries],
+    [nodes, edges, junctionDesigns, elements, patches, boundaries, vertexOverrides],
   );
   const plan = useMemo(
     () =>

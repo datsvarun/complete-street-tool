@@ -42,6 +42,7 @@ import type { BusStopPoint, ImportFilters, LatLon } from './osm/overpass';
 import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
 import { clearAutosave, fromDocument, readAutosave, writeAutosave } from './persistence';
+import type { VertexDelta, VertexOverrides } from './cad/vertexOverrides';
 
 // One shared store across all stages; stage is a UI mode, not a data boundary
 // (Plan v2 §1.1). The graph core (nodes/edges) is the undoable slice.
@@ -74,6 +75,11 @@ interface CstState extends GraphState {
   boundaryDraw: boolean;              // tracing mode armed
   boundaryDraft: number[];            // in-progress polyline
   selectedBoundaryId: string | null;
+  /** CAD keyed-vertex overrides on generated geometry (undoable, persisted).
+   *  shapeKey → fraction-key → (along, across) nudge (CAD_Architecture §1–4). */
+  vertexOverrides: VertexOverrides;
+  /** Generated shape whose vertices are being edited (Edit stage, transient). */
+  selectedShapeKey: string | null;
   /** Stage 3.5 edit: free-form patches (undoable) + drawing state (not). */
   patches: Record<string, Patch>;
   nextPatchNum: number;
@@ -173,6 +179,10 @@ interface CstState extends GraphState {
   toggleCornerChamfer: (jKey: string, cornerKey: string) => void;
   setApproachTrim: (jKey: string, approachKey: string, trimM: number | null) => void;
   removeJunctionDesign: (jKey: string) => void;
+  selectShape: (key: string | null) => void;
+  setVertexDelta: (shapeKey: string, key: string, delta: VertexDelta) => void;
+  removeVertexDelta: (shapeKey: string, key: string) => void;
+  clearShapeOverrides: (shapeKey: string) => void;
   /** Replace the whole design with a saved/restored document (undo history resets). */
   loadDocument: (raw: unknown, label?: string) => void;
   /** Start over: empty graph, empty overlays, autosave cleared. */
@@ -246,6 +256,8 @@ export const useCst = create<CstState>()(
       boundaryDraw: false,
       boundaryDraft: [],
       selectedBoundaryId: null,
+      vertexOverrides: {},
+      selectedShapeKey: null,
       patches: {},
       nextPatchNum: 1,
       patchKind: null,
@@ -280,6 +292,7 @@ export const useCst = create<CstState>()(
           patchDraft: [],
           patchKind: null,
           placeKind: null,
+          selectedShapeKey: null,
         });
         // First entry into Sections with unassigned tagged edges → auto-assign
         // + review list (Plan v2 §3.3), never overwriting existing work.
@@ -1081,6 +1094,36 @@ export const useCst = create<CstState>()(
           return { junctionDesigns, statusMsg: 'junction overrides removed' };
         }),
 
+      selectShape: (key) => set({ selectedShapeKey: key }),
+
+      setVertexDelta: (shapeKey, key, delta) =>
+        set((s) => ({
+          vertexOverrides: {
+            ...s.vertexOverrides,
+            [shapeKey]: { ...s.vertexOverrides[shapeKey], [key]: delta },
+          },
+        })),
+
+      removeVertexDelta: (shapeKey, key) =>
+        set((s) => {
+          const shape = s.vertexOverrides[shapeKey];
+          if (!shape || !(key in shape)) return {};
+          const next = { ...shape };
+          delete next[key];
+          const vertexOverrides = { ...s.vertexOverrides };
+          if (Object.keys(next).length === 0) delete vertexOverrides[shapeKey];
+          else vertexOverrides[shapeKey] = next;
+          return { vertexOverrides, statusMsg: 'vertex reset' };
+        }),
+
+      clearShapeOverrides: (shapeKey) =>
+        set((s) => {
+          if (!s.vertexOverrides[shapeKey]) return {};
+          const vertexOverrides = { ...s.vertexOverrides };
+          delete vertexOverrides[shapeKey];
+          return { vertexOverrides, statusMsg: 'shape reset to generated geometry' };
+        }),
+
       loadDocument: (raw, label = 'design') => {
         const slice = fromDocument(raw);
         if (typeof slice === 'string') {
@@ -1095,6 +1138,7 @@ export const useCst = create<CstState>()(
           selectedJunctionKey: null,
           selectedPatchId: null,
           selectedBoundaryId: null,
+          selectedShapeKey: null,
           placeKind: null,
           patchKind: null,
           patchDraft: [],
@@ -1130,6 +1174,8 @@ export const useCst = create<CstState>()(
           boundaryDraw: false,
           boundaryDraft: [],
           selectedBoundaryId: null,
+          vertexOverrides: {},
+          selectedShapeKey: null,
           busStops: [],
           selectedEdgeId: null,
           selectedEdgeIds: [],
@@ -1168,6 +1214,7 @@ export const useCst = create<CstState>()(
         nextPatchNum: s.nextPatchNum,
         boundaries: s.boundaries,
         nextBoundaryNum: s.nextBoundaryNum,
+        vertexOverrides: s.vertexOverrides,
       }),
       equality: (a, b) =>
         a.nodes === b.nodes &&
@@ -1175,7 +1222,8 @@ export const useCst = create<CstState>()(
         a.junctionDesigns === b.junctionDesigns &&
         a.elements === b.elements &&
         a.patches === b.patches &&
-        a.boundaries === b.boundaries,
+        a.boundaries === b.boundaries &&
+        a.vertexOverrides === b.vertexOverrides,
       limit: 100,
     },
   ),
@@ -1208,6 +1256,7 @@ if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       s.elements === prev.elements &&
       s.patches === prev.patches &&
       s.boundaries === prev.boundaries &&
+      s.vertexOverrides === prev.vertexOverrides &&
       s.busStops === prev.busStops
     ) {
       return;

@@ -7,6 +7,8 @@ import { buildEdgeGeometry } from '../sections/transition';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
 import { elementGraphics, laneDividers } from '../detailing/elements';
 import { graphBounds } from '../graph/ops';
+import { applyShapeOverrides } from '../cad/vertexOverrides';
+import type { VertexOverrides } from '../cad/vertexOverrides';
 
 export function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -33,6 +35,7 @@ export function planContent(
   elements: StreetElement[],
   patches: Patch[] = [],
   boundaries: Boundary[] = [],
+  vertexOverrides: VertexOverrides = {},
 ): string {
   const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs);
   const out: string[] = [];
@@ -40,21 +43,28 @@ export function planContent(
   // 1. carriageway surface + wedges + noses (junctions under ribbons)
   for (const j of junctions) {
     for (const b of j.coverBands) out.push(poly(b, '#525e6a', 'none', 0));
-    out.push(poly(j.polygon, '#525e6a', 'rgba(30,35,40,0.4)', 0.15));
+    out.push(
+      poly(applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]), '#525e6a', 'rgba(30,35,40,0.4)', 0.15),
+    );
   }
 
   // 2. edge ribbons (bands + markings), trimmed at junction mouths
   for (const e of Object.values(g.edges)) {
     if (!e.section) continue;
     const { bands, markings } = buildEdgeGeometry(e, trims[e.id]);
-    for (const b of bands) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
+    for (const b of bands) {
+      const pts = applyShapeOverrides(b.polygon, vertexOverrides[`band:${e.id}:${b.key}`]);
+      out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
+    }
     for (const m of markings) out.push(pline(m.line, '#f2f0e9', 0.2, m.dashed ? [1, 1] : undefined));
   }
 
   // 3. junction wedges / noses / transitions on top of ribbons
   for (const j of junctions) {
-    for (const b of j.wedges) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
-    for (const b of j.noses) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
+    for (const b of [...j.wedges, ...j.noses]) {
+      const pts = applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`]);
+      out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
+    }
     if (j.roundabout) {
       const r = j.roundabout;
       out.push(

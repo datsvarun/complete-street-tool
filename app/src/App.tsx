@@ -69,6 +69,7 @@ export default function App() {
         else if (s.patchDraft.length > 0) s.cancelPatch();
         else if (s.patchKind) s.setPatchKind(null);
         else if (s.placeKind) s.setPlaceKind(null);
+        else if (s.selectedShapeKey) s.selectShape(null);
         else if (s.tool !== 'select') s.setTool('select');
         else if (s.selectedElementId) s.selectElement(null);
         else if (s.selectedJunctionKey) s.selectJunction(null);
