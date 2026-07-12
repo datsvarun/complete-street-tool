@@ -118,8 +118,35 @@ From `ARCHITECTURE.md` §11 and the standing reviews:
 
 ## 4. Stability findings (this session)
 
-_To be completed with the current review pass — contained bugs fixed in the
-accompanying commit, larger ones filed here with file:line and repro._
+A focused sweep of the just-landed Edit stage, Direct tool, box-draw, and
+bbox import/export-extent found a cluster of **transient-state hygiene** bugs —
+all **fixed** in the accompanying commit, root-caused rather than patched:
+
+- **[high] Stale export/import extent survived re-import** — an old export crop
+  clipped a freshly imported network to a rectangle that no longer overlapped
+  it → silently blank plan. Fix: `importOsm`/`importOsmBbox`/`loadSample`/
+  `setStage`/`goTo` all clear `importBox` + `exportBounds`.
+- **[med] Direct tool broke selection outside Network** — nodes/vertices only
+  render in the network stage, so Direct elsewhere killed click-to-select. Fix:
+  Direct is gated to the network stage (toolbar disables it; `a` key ignored).
+- **[med] box-draw not mutually exclusive with tools / not cleared on stage
+  switch** — could leave the stage undraggable or fire two modes on one click.
+  Fix (state machine): `setBoxDraw` forces `tool:'select'`, `setTool` clears
+  `boxDraw`, `setStage` clears `boxDraw`; `onClick` early-returns while a box is
+  active. Now provably exclusive.
+- **[med] `goTo` re-anchored origin without dropping boxes** (world-metre boxes
+  pointed at the wrong place after re-anchor). Fixed with the extent-clearing above.
+- **[low] `setStage` left `patchDraft`/`patchKind`/`placeKind` armed** across
+  stages. Fixed (cleared on every stage change).
+- **[low] `selectedEdgeId` was in the undo slice but `selectedEdgeIds` wasn't**
+  → primary/multi-selection drift after undo. Fix: `selectedEdgeId` removed from
+  `partialize` (it's derived by `pruneSelections`).
+- **[low] box-draw shared `regionRef` with lasso render** → a spurious lasso
+  quad could paint over the box. Fixed by the tool/box exclusivity + a `!boxDraw`
+  render guard.
+
+Regressions locked in `store.test.ts` (tool/box exclusivity, stage clearing,
+goTo box clearing). Suite: **18 tests, all green** (`npm test`).
 
 ---
 

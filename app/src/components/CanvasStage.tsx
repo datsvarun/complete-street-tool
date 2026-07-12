@@ -1039,6 +1039,9 @@ export function CanvasStage() {
 
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
     const stageNode = e.target.getStage()!;
+    // Box-draw owns the gesture end-to-end (mousedown/move/up); a click that
+    // completes or cancels a box must not also run a tool/place action.
+    if (boxDraw) return;
     if (tool === 'draw') {
       const w = toWorld(stageNode);
       if (!w) return;
@@ -1327,7 +1330,7 @@ export function CanvasStage() {
               strokeScaleEnabled={false}
             />
           )}
-          {region && tool === 'lasso' && region.length >= 4 && (
+          {region && !boxDraw && tool === 'lasso' && region.length >= 4 && (
             <Line
               points={region}
               closed

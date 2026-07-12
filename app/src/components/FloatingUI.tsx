@@ -49,7 +49,7 @@ export function StageRail({
 
 const TOOLS: Array<{ id: Tool; icon: string; label: string; hint: string; stages?: Stage[] }> = [
   { id: 'select', icon: '➤', label: 'Select', hint: 'Selection — click streets, Shift adds, Ctrl toggles (V)' },
-  { id: 'direct', icon: '▷', label: 'Direct', hint: 'Direct selection — move nodes and vertices (A)' },
+  { id: 'direct', icon: '▷', label: 'Direct', hint: 'Direct selection — move nodes and vertices (A)', stages: ['network'] },
   { id: 'marquee', icon: '▭', label: 'Rect', hint: 'Rectangle select — drag a box (M)' },
   { id: 'lasso', icon: '◌', label: 'Lasso', hint: 'Lasso select — draw around streets (L)' },
   { id: 'draw', icon: '✎', label: 'Draw', hint: 'Draw streets (D)', stages: ['network'] },

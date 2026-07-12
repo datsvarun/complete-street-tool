@@ -236,7 +236,19 @@ export const useCst = create<CstState>()(
       reviewList: [],
 
       setStage: (stage) => {
-        set({ stage, tool: 'select', draft: [], highlightEdges: [] });
+        // Leaving any stage drops all transient drawing/placement modes so
+        // nothing (a half-drawn patch, an armed material, an unfinished box)
+        // leaks into the next stage where it has no meaning.
+        set({
+          stage,
+          tool: 'select',
+          draft: [],
+          highlightEdges: [],
+          boxDraw: null,
+          patchDraft: [],
+          patchKind: null,
+          placeKind: null,
+        });
         // First entry into Sections with unassigned tagged edges → auto-assign
         // + review list (Plan v2 §3.3), never overwriting existing work.
         if (stage === 'sections') {
@@ -248,7 +260,10 @@ export const useCst = create<CstState>()(
           if (fresh) get().autoAssign();
         }
       },
-      setTool: (tool) => set((s) => ({ tool, draft: tool === 'draw' ? s.draft : [] })),
+      // Picking a tool exits box-draw mode; arming a box (setBoxDraw) forces the
+      // select tool. Together these keep box-draw and the tools mutually
+      // exclusive, so one gesture can never trigger two modes.
+      setTool: (tool) => set((s) => ({ tool, boxDraw: null, draft: tool === 'draw' ? s.draft : [] })),
 
       addDraftVert: (v) => set((s) => ({ draft: [...s.draft, v] })),
 
@@ -568,6 +583,8 @@ export const useCst = create<CstState>()(
             patches: {},
             nextPatchNum: 1,
             selectedPatchId: null,
+            importBox: null,
+            exportBounds: null,
             reviewList: [],
             dcCandidates: null,
             highlightEdges: [],
@@ -599,6 +616,8 @@ export const useCst = create<CstState>()(
           patches: {},
           nextPatchNum: 1,
           selectedPatchId: null,
+          importBox: null,
+          exportBounds: null,
           reviewList: [],
           dcCandidates: null,
           highlightEdges: [],
@@ -610,6 +629,7 @@ export const useCst = create<CstState>()(
       setBoxDraw: (purpose) =>
         set({
           boxDraw: purpose,
+          tool: 'select', // box-draw and the drawing tools are mutually exclusive
           statusMsg: purpose ? `drag a rectangle on the canvas to set the ${purpose} area` : '',
         }),
 
@@ -648,6 +668,7 @@ export const useCst = create<CstState>()(
             dcCandidates: null,
             highlightEdges: [],
             importBox: null,
+            exportBounds: null,
             pendingFit: graphBounds(cleaned.g),
             statusMsg: `Imported ${Object.keys(cleaned.g.edges).length} edges / ${Object.keys(cleaned.g.nodes).length} nodes (${cleaned.summary})`,
           });
@@ -689,6 +710,11 @@ export const useCst = create<CstState>()(
             return {
               origin: p,
               importTarget: p,
+              // Boxes are world metres relative to the OLD origin — drop them
+              // so they can't point at the wrong place after re-anchoring.
+              importBox: null,
+              exportBounds: null,
+              boxDraw: null,
               pendingFit: { minX: -260, minY: -260, maxX: 260, maxY: 260 },
               statusMsg: `Centered on ${label}`,
             };
@@ -944,7 +970,8 @@ export const useCst = create<CstState>()(
         nextNodeNum: s.nextNodeNum,
         nextEdgeNum: s.nextEdgeNum,
         origin: s.origin,
-        selectedEdgeId: s.selectedEdgeId,
+        // selectedEdgeId is NOT persisted — it is derived from selectedEdgeIds
+        // by pruneSelections after undo, so the two can never drift apart.
         junctionDesigns: s.junctionDesigns,
         elements: s.elements,
         nextElementNum: s.nextElementNum,
@@ -964,7 +991,8 @@ export const useCst = create<CstState>()(
 
 export { DEFAULT_IMPORT };
 
-// Dev-only handle for Playwright drives and console debugging.
-if (import.meta.env.DEV) {
+// Dev-only handle for Playwright drives and console debugging (guard `window`
+// so the store is importable in the node test environment).
+if (import.meta.env.DEV && typeof window !== 'undefined') {
   (window as unknown as Record<string, unknown>).__cst = useCst;
 }

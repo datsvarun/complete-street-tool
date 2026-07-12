@@ -74,8 +74,8 @@ export default function App() {
           s.setStage(STAGE_KEYS[k]);
           setPanelOpen(true);
         } else if (TOOL_KEYS[k]) {
-          // draw/split only exist where their rail shows them
-          if ((TOOL_KEYS[k] === 'draw' || TOOL_KEYS[k] === 'split') && s.stage !== 'network') return;
+          // direct/draw/split are network-only (nodes & vertices live there)
+          if (['direct', 'draw', 'split'].includes(TOOL_KEYS[k]) && s.stage !== 'network') return;
           s.setTool(TOOL_KEYS[k]);
         } else if (k === 'f') {
           s.fitAll();
