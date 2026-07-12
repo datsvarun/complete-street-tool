@@ -78,18 +78,62 @@ export function JunctionsPanel() {
           <h3>
             {selected.nodeIds.join('+')} · {selected.degree}-way
           </h3>
-          <label className="small">
-            Type{' '}
-            <select
-              value={design?.type ?? 'priority'}
-              onChange={(e) => setJunctionType(selected.key, e.target.value as JunctionType)}
-            >
-              <option value="priority">priority</option>
-              <option value="signalized">signalized</option>
-              <option value="roundabout">roundabout</option>
-            </select>
-            <span className="muted"> (templates land in the next slice)</span>
-          </label>
+          {(() => {
+            const form = design?.type ?? 'priority';
+            const isRegular = form === 'priority' || form === 'signalized';
+            return (
+              <>
+                <div className="tool-row">
+                  <button
+                    className={isRegular ? 'active' : ''}
+                    title="Standard junction — fillet corners, priority or signal control"
+                    onClick={() => setJunctionType(selected.key, 'priority')}
+                  >
+                    Regular
+                  </button>
+                  <button
+                    className={form === 'roundabout' ? 'active' : ''}
+                    title="Central island + circulatory carriageway sized from the junction"
+                    onClick={() => setJunctionType(selected.key, 'roundabout')}
+                  >
+                    Roundabout
+                  </button>
+                  <button
+                    className={form === 'custom' ? 'active' : ''}
+                    title="Free-form junction geometry (elaborated later)"
+                    onClick={() => setJunctionType(selected.key, 'custom')}
+                  >
+                    Custom
+                  </button>
+                </div>
+                {isRegular && (
+                  <label className="small">
+                    Control{' '}
+                    <select
+                      value={form}
+                      onChange={(e) => setJunctionType(selected.key, e.target.value as JunctionType)}
+                    >
+                      <option value="priority">priority</option>
+                      <option value="signalized">signalized</option>
+                    </select>
+                    <span className="muted"> (signal templates land in the next slice)</span>
+                  </label>
+                )}
+                {form === 'roundabout' && (
+                  <p className="muted small">
+                    Island and circulatory derive from the junction size. Too-small
+                    junctions show no ring — enlarge approach trims first.
+                  </p>
+                )}
+                {form === 'custom' && (
+                  <p className="muted small">
+                    Custom geometry: use the Edit stage — patches and (soon)
+                    direct node control over the generated outline.
+                  </p>
+                )}
+              </>
+            );
+          })()}
 
           <h3>Corners</h3>
           <ul className="edge-list">

@@ -64,7 +64,9 @@ export interface EdgeSection {
  *  Keys are stable: junction = sorted node ids, corner/approach = edge ends,
  *  so overrides survive regeneration and go stale (not wrong) when the
  *  topology changes underneath them. */
-export type JunctionType = 'priority' | 'signalized' | 'roundabout';
+// Top-level junction form: regular (priority/signalized control), roundabout,
+// or custom (free-form editing — elaborated with the CAD editor).
+export type JunctionType = 'priority' | 'signalized' | 'roundabout' | 'custom';
 
 export interface CornerOverride {
   radiusM?: number;

@@ -639,6 +639,37 @@ function ArtifactsLayerImpl({
           />
         )),
       )}
+      {artifacts.junctions
+        .filter((j) => j.roundabout)
+        .flatMap((j) => {
+          const r = j.roundabout!;
+          return [
+            // circulation guide (mid-circulatory dashed line)
+            <Circle
+              key={`${j.key}-ring`}
+              x={r.cx}
+              y={r.cy}
+              radius={(r.islandR + r.outerR) / 2}
+              stroke="#f2f0e9"
+              strokeWidth={1}
+              dash={[6, 5]}
+              strokeScaleEnabled={false}
+              listening={false}
+            />,
+            // central island
+            <Circle
+              key={`${j.key}-island`}
+              x={r.cx}
+              y={r.cy}
+              radius={r.islandR}
+              fill={KIND_COLORS.median}
+              stroke="#f2f0e9"
+              strokeWidth={1.2}
+              strokeScaleEnabled={false}
+              listening={false}
+            />,
+          ];
+        })}
       {artifacts.transitions.flatMap((t) =>
         t.bands.map((b) => (
           <Line

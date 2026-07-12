@@ -121,6 +121,9 @@ export interface JunctionPoly {
   corners: CornerInfo[];
   approachInfos: ApproachInfo[];
   movements: Movement[];
+  /** Derived roundabout geometry when the design type is 'roundabout' and the
+   *  junction is big enough: central island + circulatory carriageway. */
+  roundabout?: { cx: number; cy: number; islandR: number; outerR: number };
 }
 
 export interface NodeTransition {
@@ -623,6 +626,17 @@ function computeJunction(
     });
   });
 
+  // Roundabout form (Junction_Tool_Design J6 preview): island + circulatory
+  // sized from the tightest approach mouth. IRC urban circulatory ≈ 7 m.
+  let roundabout: JunctionPoly['roundabout'];
+  if (design?.type === 'roundabout' && approachInfos.length > 0) {
+    const minMouth = Math.min(...approachInfos.map((a) => dist(a.x, a.y, cx, cy)));
+    if (Number.isFinite(minMouth) && minMouth >= 6) {
+      const outerR = minMouth * 0.92;
+      roundabout = { cx, cy, islandR: Math.max(1.5, outerR - 7), outerR };
+    }
+  }
+
   return {
     poly: {
       key: [...nodeIds].sort().join('+'),
@@ -636,6 +650,7 @@ function computeJunction(
       corners: cornerInfos,
       approachInfos,
       movements,
+      ...(roundabout ? { roundabout } : {}),
     },
     trims: [
       ...approaches.map((a, i) => ({

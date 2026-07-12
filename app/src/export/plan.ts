@@ -55,6 +55,13 @@ export function planContent(
   for (const j of junctions) {
     for (const b of j.wedges) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
     for (const b of j.noses) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
+    if (j.roundabout) {
+      const r = j.roundabout;
+      out.push(
+        `<circle cx="${num(r.cx)}" cy="${num(r.cy)}" r="${num((r.islandR + r.outerR) / 2)}" fill="none" stroke="#f2f0e9" stroke-width="0.2" stroke-dasharray="1.2 1"/>`,
+        `<circle cx="${num(r.cx)}" cy="${num(r.cy)}" r="${num(r.islandR)}" fill="${KIND_COLORS.median}" stroke="#f2f0e9" stroke-width="0.25"/>`,
+      );
+    }
   }
   for (const t of transitions) {
     for (const b of t.bands) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
