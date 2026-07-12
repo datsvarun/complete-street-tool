@@ -136,6 +136,8 @@ Patch { kind: ComponentKind | 'cut',         // edit stage: free-form polygon
 | `geometry/spatialIndex.ts` | uniform-grid edge index (CAD P1), memoized per edges-record identity; all hit tests (`findSnap`, `resolveDrop`, node-drag snap) query local candidates only | `edgesNear` |
 | `cad/vertexOverrides.ts` | **CAD keyed-vertex engine** (P3/P4): parametric (along, across) nudges per perimeter-fraction key, re-applied to every regenerated outline; unmatched keys skip (stale, not wrong). Shape keys: `band:{edgeId}:{bandKey}`, `jring:{jKey}`, `jband:{jKey}:{bandKey}` | `applyShapeOverrides`, `deltaForDrag`, `vertexFractions` |
 | `persistence.ts` | versioned `.cst.json` document (= the decision slice), structural validation with forward-compatible defaults, debounced localStorage autosave + restore | `toDocument`, `fromDocument`, `downloadDocument`, `readAutosave` |
+| `scene3d/buildScene.ts` | **3D scaffold**: same derived design → renderer-agnostic `SceneSpec` (extruded prisms with IRC kerb heights + tree/light posts); vertex overrides applied for 2D/3D parity | `buildScene` |
+| `components/Scene3D.tsx` | lazy three.js viewer of the SceneSpec (orbit camera, sun/sky, ground); loads as its own chunk on first open of the header "3D" button | default export |
 | `store.ts` | one zustand store for all stages + zundo temporal undo (see §7); also boundaries (traced plot/ROW polylines), vertexOverrides, busStops, importFilters | `useCst` |
 | `components/CanvasStage.tsx` | the canvas: view/camera, all Konva layers, draw/snap, marquee/lasso, drag interactions, hover cursors, floating canvas chrome | `CanvasStage` |
 | `components/FloatingUI.tsx` | stage rail, tool rail, basemap FAB, scale bar, compass | |

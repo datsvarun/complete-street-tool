@@ -430,6 +430,8 @@ button.chip.active {
   min-width: 0;
   background: var(--canvas);
   overflow: hidden;
+  /* the canvas owns all touch gestures — no page scroll/zoom underneath */
+  touch-action: none;
 }
 
 /* Must out-rank maplibre-gl.css's `.maplibregl-map { position: relative }`,
@@ -940,4 +942,155 @@ button.chip.active {
   text-align: right;
   z-index: 20;
   pointer-events: none;
+}
+
+/* ── Maturity wave: toast, help modal, 3D view, mobile ─────────────────── */
+
+.toast {
+  position: fixed;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(28, 39, 51, 0.92);
+  color: #f4f2ec;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 12.5px;
+  max-width: min(70vw, 560px);
+  z-index: 90;
+  box-shadow: 0 6px 20px rgba(20, 30, 40, 0.25);
+  animation: toast-in 160ms ease-out;
+  pointer-events: none;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, -6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 26, 33, 0.45);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal {
+  background: var(--panel, #fafbfc);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(20, 30, 40, 0.3);
+  padding: 18px 22px;
+  max-width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.modal h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.shortcuts {
+  border-collapse: collapse;
+  font-size: 12.5px;
+  margin-bottom: 12px;
+}
+
+.shortcuts td {
+  padding: 4px 10px 4px 0;
+  vertical-align: top;
+}
+
+.shortcuts kbd {
+  background: var(--accent-bg, #f0e9dd);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.scene3d {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: #dfe9f0;
+}
+
+.scene3d.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4a5560;
+  font-size: 14px;
+}
+
+.scene3d canvas {
+  display: block;
+}
+
+.scene3d-close {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(20, 30, 40, 0.18);
+}
+
+.scene3d-hint {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 16px;
+  padding: 5px 14px;
+  font-size: 11.5px;
+  color: #4a5560;
+  pointer-events: none;
+}
+
+/* ── Small screens: bottom-sheet panel, icon toolbar, compact chrome ───── */
+@media (max-width: 860px) {
+  header {
+    gap: 8px;
+    padding: 0 8px;
+    height: auto;
+    min-height: 44px;
+    flex-wrap: wrap;
+  }
+
+  .brand .muted { display: none; }
+  .opacity-slider { display: none; }
+  .geocode { margin-left: 0; }
+  .geocode input { width: 120px; }
+  .tt-label { display: none; }
+  .tt-btn { min-width: 32px; padding: 6px 7px 5px; }
+  .tt-icon { font-size: 14px; }
+
+  /* panel becomes a bottom sheet clear of the stage rail */
+  .floating-panel {
+    left: 62px;
+    right: 8px;
+    width: auto;
+    top: auto;
+    bottom: 8px;
+    max-height: 46vh;
+  }
+
+  .stage-rail { transform: scale(0.92); transform-origin: top left; }
+  .hint-pill { display: none; }
+  .coords-pill { display: none; }
+  .toast { top: auto; bottom: 12px; }
 }

@@ -1,6 +1,73 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useCst } from './store';
 import { downloadDocument } from './persistence';
+
+// three.js loads only when the 3D view opens — the plan editor stays lean.
+const Scene3D = lazy(() => import('./components/Scene3D'));
+
+/** Global status toast: every store statusMsg surfaces here, auto-dismissing —
+ *  feedback no longer depends on which panel happens to be open. */
+function Toast() {
+  const statusMsg = useCst((s) => s.statusMsg);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!statusMsg) {
+      setShown(false);
+      return;
+    }
+    setShown(true);
+    const t = window.setTimeout(() => setShown(false), 3500);
+    return () => window.clearTimeout(t);
+  }, [statusMsg]);
+  if (!shown || !statusMsg) return null;
+  return (
+    <div className="toast" role="status">
+      {statusMsg}
+    </div>
+  );
+}
+
+const SHORTCUTS: Array<[string, string]> = [
+  ['1 – 6', 'Stages: Network · Street · Junction · Detail · Edit · Export'],
+  ['V / A', 'Select · Direct selection (move nodes & vertices)'],
+  ['M / L', 'Rectangle · Lasso selection'],
+  ['D / X / E', 'Draw · Split · Delete street (network stage)'],
+  ['F', 'Fit the whole network'],
+  ['P', 'Show / hide the stage panel'],
+  ['Ctrl+Z / Ctrl+Shift+Z', 'Undo · Redo'],
+  ['Ctrl+A', 'Select all streets'],
+  ['Enter / double-click', 'Finish street, boundary, or patch'],
+  ['Esc', 'Cancel drawing → drop tool → clear selection'],
+  ['Delete', 'Remove the selected street / element / patch / boundary'],
+  ['Shift-click / Ctrl-click', 'Add to · toggle selection'],
+  ['Right-click', 'Remove node, vertex, element, or patch'],
+  ['?', 'This help'],
+];
+
+function HelpOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Keyboard shortcuts</h2>
+        <table className="shortcuts">
+          <tbody>
+            {SHORTCUTS.map(([k, desc]) => (
+              <tr key={k}>
+                <td>
+                  <kbd>{k}</kbd>
+                </td>
+                <td>{desc}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <button className="mini" onClick={onClose}>
+          Close (Esc)
+        </button>
+      </div>
+    </div>
+  );
+}
 import { NetworkPanel } from './components/NetworkPanel';
 import { SectionsPanel } from './components/SectionsPanel';
 import { CanvasStage } from './components/CanvasStage';
@@ -37,6 +104,10 @@ export default function App() {
   const designOpacity = useCst((s) => s.designOpacity);
   const setDesignOpacity = useCst((s) => s.setDesignOpacity);
   const [panelOpen, setPanelOpen] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [view3d, setView3d] = useState(false);
+  const overlayRef = useRef({ helpOpen: false, view3d: false });
+  overlayRef.current = { helpOpen, view3d };
   const fileRef = useRef<HTMLInputElement>(null);
 
   const openFile = async (file: File) => {
@@ -52,6 +123,18 @@ export default function App() {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
       const s = useCst.getState();
       const k = e.key.toLowerCase();
+      // Overlays swallow keys: Esc closes, ? toggles help, rest pass nothing.
+      if (overlayRef.current.helpOpen || overlayRef.current.view3d) {
+        if (e.key === 'Escape' || e.key === '?') {
+          setHelpOpen(false);
+          setView3d(false);
+        }
+        return;
+      }
+      if (e.key === '?') {
+        setHelpOpen(true);
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && k === 'z') {
         e.preventDefault();
         if (e.shiftKey) s.redo();
@@ -157,6 +240,12 @@ export default function App() {
           <button onClick={() => useCst.getState().redo()} title="Redo (Ctrl+Shift+Z)">
             ↪
           </button>
+          <button onClick={() => setView3d(true)} title="Preview the design in 3D">
+            3D
+          </button>
+          <button onClick={() => setHelpOpen(true)} title="Keyboard shortcuts (?)">
+            ?
+          </button>
         </div>
       </header>
       <main>
@@ -186,6 +275,13 @@ export default function App() {
           </div>
         )}
       </main>
+      <Toast />
+      {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
+      {view3d && (
+        <Suspense fallback={<div className="scene3d loading">Loading 3D…</div>}>
+          <Scene3D onClose={() => setView3d(false)} />
+        </Suspense>
+      )}
     </div>
   );
 }

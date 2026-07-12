@@ -13,7 +13,6 @@ export function NetworkPanel() {
   const removeEdges = useCst((s) => s.removeEdges);
   const mergeSelectedAsDc = useCst((s) => s.mergeSelectedAsDc);
   const dcCandidates = useCst((s) => s.dcCandidates);
-  const statusMsg = useCst((s) => s.statusMsg);
   const importBusy = useCst((s) => s.importBusy);
   const selectEdge = useCst((s) => s.selectEdge);
   const simplifyAll = useCst((s) => s.simplifyAll);
@@ -193,7 +192,6 @@ export function NetworkPanel() {
           {selectedEdgeIds.length === 1 && selected?.name ? ` (${selected.name})` : ''}
         </button>
       )}
-      {statusMsg && <p className="status small">{statusMsg}</p>}
     </div>
   );
 }

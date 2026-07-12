@@ -31,7 +31,10 @@ deploy:pages` then push (GitHub Pages, deploy-from-branch).
 | Junction form Regular/Roundabout/Custom + roundabout preview geometry | **shipped** |
 | **CAD P1** spatial index + unified snapping | **shipped** |
 | **CAD P3–P5** keyed-vertex overrides, Edit-stage node editing of generated geometry | **shipped** |
-| vitest engine suite (32 tests) | **shipped** |
+| vitest engine suite (35 tests) | **shipped** |
+| Canvas performance layer (LOD, viewport culling, imperative pointer path) | **shipped** — ARCHITECTURE §8 |
+| UI maturity: status toast, shortcut help (?), mobile (touch pinch/tap, bottom-sheet panels) | **shipped** |
+| **3D scaffold**: `scene3d/buildScene` spec + lazy three.js viewer (header "3D") | **shipped** — extrusions/kerbs/trees/lights |
 | CAD P2 generic `<HandleLayer>` refactor | **not started** — next structural cleanup |
 | Junctions J5–J7 (signal/priority templates, full roundabout, probe/validation) | **not started** |
 | Detailing depth (element properties, signs, signals) | **partial** |
@@ -91,6 +94,15 @@ like the review list.
 ### P7 — Export & measurement polish
 GeoJSON export; dimension/measurement annotations on the snapping service;
 multi-sheet / paper-size presets; north arrow + legend refinements.
+
+### P8 — 3D depth (on the shipped scaffold)
+`scene3d/buildScene.ts` is the contract: pure design → `SceneSpec` (prisms +
+posts), consumed by the lazy three.js viewer. Next increments, in order:
+building massing from OSM (`building` footprints × height tags), remaining
+element kinds (bus shelters, signals, bollards), textures/road markings in 3D,
+an eye-level walkthrough camera, and glTF export straight from the SceneSpec.
+Mobile note: right-click affordances (remove node/element) have no touch
+equivalent yet — needs a long-press or explicit delete-mode pass.
 
 ---
 

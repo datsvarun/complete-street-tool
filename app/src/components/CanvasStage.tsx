@@ -19,6 +19,9 @@ import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { EdgeTrim, JunctionPoly, NodeArtifacts } from '../graph/junctions';
 
 Konva.dragDistance = 3; // don't treat a pan drag as a click
+// Touch: keep hit detection alive while a finger drags, so the second finger
+// of a pinch is seen (standard Konva mobile recipe).
+Konva.hitOnDragEnabled = true;
 
 /** Pointer position in world metres — the ONE screen→world conversion. */
 function stageToWorld(stageNode: Konva.Stage): { x: number; y: number } | null {
@@ -57,6 +60,12 @@ const NODE_COLORS = {
   junction: '#FF9800',
   crossroads: '#F44336',
 } as const;
+
+/** One handler for mouse click AND touch tap (Konva fires them separately).
+ *  Touch events lack modifier keys — handlers already treat those as falsy. */
+function pressable(h: (e: KonvaEventObject<MouseEvent>) => void) {
+  return { onClick: h, onTap: h as unknown as (e: KonvaEventObject<TouchEvent>) => void };
+}
 
 /** Reactive hover cursor: set on enter, clear on leave (falls back to the
  *  container's tool cursor). */
@@ -223,7 +232,7 @@ function EdgeShape({
           strokeWidth={0.6}
           strokeScaleEnabled={false}
           perfectDrawEnabled={false}
-          onClick={(e) => onBandClick(e, b.key)}
+          {...pressable((e) => onBandClick(e, b.key))}
           {...hoverCursor('pointer')}
         />
       ))}
@@ -259,7 +268,7 @@ function EdgeShape({
         dash={showSections && section && !selected ? [6, 6] : edge.carriagewayType === 'divided' ? [10, 4] : undefined}
         strokeScaleEnabled={false}
         hitStrokeWidth={12}
-        onClick={onClick}
+        {...pressable(onClick)}
         {...hoverCursor('pointer')}
       />
     </>
@@ -361,11 +370,11 @@ function NodesLayerImpl({
             e.cancelBubble = true;
             removeNodeSmart(n.id);
           }}
-          onClick={(e) => {
+          {...pressable((e) => {
             if (useCst.getState().tool !== 'erase') return;
             e.cancelBubble = true;
             removeNodeSmart(n.id);
-          }}
+          })}
           {...hoverCursor('move')}
           onDragStart={() => useCst.temporal.getState().pause()}
           onDragMove={(e) => {
@@ -453,11 +462,11 @@ function VerticesLayerImpl({
                 ev.cancelBubble = true;
                 removeVertex(e.id, i);
               }}
-              onClick={(ev) => {
+              {...pressable((ev) => {
                 if (useCst.getState().tool !== 'erase') return;
                 ev.cancelBubble = true;
                 removeVertex(e.id, i);
-              }}
+              })}
               onDragStart={() => useCst.temporal.getState().pause()}
               onDragMove={(ev) => moveVertex(e.id, i, ev.target.x(), ev.target.y())}
               onDragEnd={(ev) => {
@@ -548,11 +557,11 @@ function ElementShapeImpl({
       draggable={interactive}
       {...(interactive ? hoverCursor('move') : {})}
       opacity={el.placedBy === 'suggest' ? 0.75 : 1}
-      onClick={(ev) => {
+      {...pressable((ev) => {
         if (!interactive) return;
         ev.cancelBubble = true;
         selectElement(el.id);
-      }}
+      })}
       onDragStart={() => useCst.temporal.getState().pause()}
       onDragMove={(ev) => {
         const w = stageToWorld(ev.target.getStage()!);
@@ -738,15 +747,13 @@ function ArtifactsLayerImpl({
           strokeScaleEnabled={false}
           perfectDrawEnabled={false}
           opacity={dimOthers && j.key !== selectedJunctionKey ? 0.45 : 1}
-          onClick={
-            junctionsStage
-              ? () => selectJunction(j.key)
-              : editStage
-                ? (e) => {
-                    if (selectShape(`jring:${j.key}`)) e.cancelBubble = true;
-                  }
-                : undefined
-          }
+          {...(junctionsStage
+            ? pressable(() => selectJunction(j.key))
+            : editStage
+              ? pressable((e) => {
+                  if (selectShape(`jring:${j.key}`)) e.cancelBubble = true;
+                })
+              : {})}
           {...(junctionsStage || editStage ? hoverCursor('pointer') : {})}
         />
       ))}
@@ -762,13 +769,11 @@ function ArtifactsLayerImpl({
             strokeScaleEnabled={false}
             perfectDrawEnabled={false}
             listening={editStage}
-            onClick={
-              editStage
-                ? (e) => {
-                    if (selectShape(`jband:${j.key}:${b.key}`)) e.cancelBubble = true;
-                  }
-                : undefined
-            }
+            {...(editStage
+              ? pressable((e) => {
+                  if (selectShape(`jband:${j.key}:${b.key}`)) e.cancelBubble = true;
+                })
+              : {})}
             {...(editStage ? hoverCursor('pointer') : {})}
           />
         )),
@@ -860,11 +865,11 @@ function PatchesLayerImpl({
           strokeWidth={p.id === selectedPatchId ? 1.6 : 0.8}
           dash={p.kind === 'cut' ? [4, 3] : undefined}
           strokeScaleEnabled={false}
-          onClick={(ev) => {
+          {...pressable((ev) => {
             if (!interactive) return;
             ev.cancelBubble = true;
             selectPatch(p.id);
-          }}
+          })}
           onContextMenu={(ev) => {
             ev.evt.preventDefault();
             ev.cancelBubble = true;
@@ -942,13 +947,13 @@ function BoundariesLayerImpl({
           dash={[9, 4, 2, 4]}
           strokeScaleEnabled={false}
           hitStrokeWidth={12}
-          onClick={(ev) => {
+          {...pressable((ev) => {
             const t = useCst.getState().tool;
             if (!interactive) return;
             ev.cancelBubble = true;
             if (t === 'erase') removeBoundary(b.id);
             else selectBoundary(b.id);
-          }}
+          })}
           onContextMenu={(ev) => {
             ev.evt.preventDefault();
             ev.cancelBubble = true;
@@ -1179,6 +1184,8 @@ export function CanvasStage() {
   const coordsRef = useRef<HTMLDivElement>(null);
   const pendingViewRef = useRef<{ x: number; y: number } | null>(null);
   const viewRafRef = useRef<number | null>(null);
+  // two-finger pinch state (distance + midpoint of the previous frame)
+  const pinchRef = useRef<{ dist: number; cx: number; cy: number } | null>(null);
 
   const stage = useCst((s) => s.stage);
   const tool = useCst((s) => s.tool);
@@ -1355,6 +1362,38 @@ export function CanvasStage() {
   }, [pendingFit, size]);
 
   const toWorld = stageToWorld;
+
+  /** Two-finger pinch: zoom about the finger midpoint, pan with its drift.
+   *  One-finger pan rides the stage's normal (touch-driven) drag. */
+  const onTouchMove = (e: KonvaEventObject<TouchEvent>) => {
+    const [t1, t2] = [e.evt.touches[0], e.evt.touches[1]];
+    if (!t1 || !t2) return;
+    e.evt.preventDefault();
+    const stageNode = e.target.getStage()!;
+    if (stageNode.isDragging()) stageNode.stopDrag(); // pinch overrides pan-drag
+    const rect = stageNode.container().getBoundingClientRect();
+    const p1 = { x: t1.clientX - rect.left, y: t1.clientY - rect.top };
+    const p2 = { x: t2.clientX - rect.left, y: t2.clientY - rect.top };
+    const cx = (p1.x + p2.x) / 2;
+    const cy = (p1.y + p2.y) / 2;
+    const d = Math.max(Math.hypot(p2.x - p1.x, p2.y - p1.y), 1);
+    const prev = pinchRef.current;
+    pinchRef.current = { dist: d, cx, cy };
+    if (!prev) return;
+    setView((v) => {
+      const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.scale * (d / prev.dist)));
+      const applied = scale / v.scale;
+      return {
+        scale,
+        x: cx - (prev.cx - v.x) * applied,
+        y: cy - (prev.cy - v.y) * applied,
+      };
+    });
+  };
+
+  const onTouchEnd = () => {
+    pinchRef.current = null;
+  };
 
   const onWheel = (e: KonvaEventObject<WheelEvent>) => {
     e.evt.preventDefault();
@@ -1648,10 +1687,16 @@ export function CanvasStage() {
         }}
         onWheel={onWheel}
         onClick={onClick}
+        // taps behave as clicks; touch events lack modifier keys, which the
+        // handler already treats as falsy
+        onTap={(e) => onClick(e as unknown as KonvaEventObject<MouseEvent>)}
         onDblClick={onDblClick}
+        onDblTap={onDblClick}
         onMouseDown={onMouseDown}
         onMouseUp={onMouseUp}
         onMouseMove={onMouseMove}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
         {showSections && (

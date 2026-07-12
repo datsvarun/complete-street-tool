@@ -7,7 +7,6 @@ export function SectionsPanel() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const reviewList = useCst((s) => s.reviewList);
-  const statusMsg = useCst((s) => s.statusMsg);
   const tool = useCst((s) => s.tool);
   const setTool = useCst((s) => s.setTool);
   const assignSectionToSelected = useCst((s) => s.assignSectionToSelected);
@@ -114,7 +113,6 @@ export function SectionsPanel() {
           </ul>
         </>
       )}
-      {statusMsg && <p className="status small">{statusMsg}</p>}
     </div>
   );
 }
