@@ -18,7 +18,7 @@ import type {
   StreetElement,
   Tool,
 } from './types';
-import { DEFAULT_WIDTH, pruneElements, resolveDrop, suggestElements } from './detailing/elements';
+import { DEFAULT_WIDTH, pruneElements, resolveDrop, suggestBusStops, suggestElements, suggestZebras } from './detailing/elements';
 import { projectOnPolyline } from './geometry/polyline';
 import { deriveNodeArtifactsCached } from './graph/junctions';
 import {
@@ -146,6 +146,8 @@ interface CstState extends GraphState {
   suggest: (kind: ElementKind) => void;
   clearSuggestions: () => void;
   setEdgeLanes: (edgeId: string, lanes: number) => void;
+  /** Auto lane counts from carriageway width (3.25 m lanes) → dashed dividers. */
+  suggestLanes: () => void;
   selectJunction: (key: string | null) => void;
   setBoundaryDraw: (on: boolean) => void;
   addBoundaryVert: (x: number, y: number) => void;
@@ -797,8 +799,24 @@ export const useCst = create<CstState>()(
       suggest: (kind) =>
         set((s) => {
           const { trims } = deriveNodeArtifactsCached(pickGraph(s), s.junctionDesigns);
-          const created = suggestElements(pickGraph(s), kind, Object.values(s.elements), trims);
-          if (created.length === 0) return { statusMsg: `no eligible belts for ${kind} suggestions` };
+          const existing = Object.values(s.elements);
+          const created =
+            kind === 'zebra'
+              ? suggestZebras(pickGraph(s), existing, trims)
+              : kind === 'busstop'
+                ? suggestBusStops(pickGraph(s), s.busStops, existing)
+                : suggestElements(pickGraph(s), kind, existing, trims);
+          if (created.length === 0) {
+            if (kind === 'busstop') {
+              return {
+                statusMsg:
+                  s.busStops.length === 0
+                    ? 'no bus stops in the OSM download — import an area that has some, or place them by hand'
+                    : 'all downloaded bus stops are already covered',
+              };
+            }
+            return { statusMsg: kind === 'zebra' ? 'no junction approaches need a crossing' : `no eligible belts for ${kind} suggestions` };
+          }
           const elements = { ...s.elements };
           let n = s.nextElementNum;
           for (const el of created) {
@@ -831,6 +849,29 @@ export const useCst = create<CstState>()(
               [edgeId]: { ...e, lanes: lanes >= 2 ? Math.min(6, Math.round(lanes)) : undefined },
             },
           };
+        }),
+
+      suggestLanes: () =>
+        set((s) => {
+          const edges = { ...s.edges };
+          let n = 0;
+          for (const e of Object.values(s.edges)) {
+            if (!e.section || e.lanes) continue;
+            const w = Math.max(
+              0,
+              ...e.section.components
+                .filter((c) => c.kind === 'carriageway' || c.kind === 'brt')
+                .map((c) => c.widthM),
+            );
+            const lanes = Math.round(w / 3.25); // IRC urban lane width
+            if (lanes >= 2) {
+              edges[e.id] = { ...e, lanes: Math.min(4, lanes) };
+              n++;
+            }
+          }
+          return n
+            ? { edges, statusMsg: `lane lines generated on ${n} street(s) — tune per street below` }
+            : { statusMsg: 'no carriageways wide enough for extra lane lines' };
         }),
 
       selectJunction: (key) => set({ selectedJunctionKey: key }),

@@ -35,13 +35,14 @@ const GROUPS: Array<{ title: string; items: Array<{ kind: ElementKind; variant?:
   },
 ];
 
-const SUGGESTABLE: ElementKind[] = ['tree', 'streetlight', 'dustbin'];
+const SUGGESTABLE: ElementKind[] = ['tree', 'streetlight', 'dustbin', 'zebra', 'busstop'];
 
 export function DetailingPanel() {
   const placeKind = useCst((s) => s.placeKind);
   const placeVariant = useCst((s) => s.placeVariant);
   const setPlaceKind = useCst((s) => s.setPlaceKind);
   const suggest = useCst((s) => s.suggest);
+  const suggestLanes = useCst((s) => s.suggestLanes);
   const clearSuggestions = useCst((s) => s.clearSuggestions);
   const elements = useCst((s) => s.elements);
   const edges = useCst((s) => s.edges);
@@ -96,12 +97,19 @@ export function DetailingPanel() {
       ))}
 
       <h3>Auto-suggest</h3>
+      <p className="muted small">
+        Crossings go at junction approaches; bus stops come from the OSM
+        download; lane lines derive from carriageway width.
+      </p>
       <div className="palette">
         {SUGGESTABLE.map((k) => (
           <button key={k} className="chip" onClick={() => suggest(k)}>
             + {ELEMENT_LABELS[k]}s
           </button>
         ))}
+        <button className="chip" onClick={() => suggestLanes()}>
+          + Lane markings
+        </button>
       </div>
       {suggestedCount > 0 && (
         <button className="mini" onClick={clearSuggestions}>

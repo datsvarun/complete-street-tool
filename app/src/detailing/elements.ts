@@ -376,6 +376,58 @@ export function suggestElements(
   return out;
 }
 
+/** Zebra crossings at junction approaches: one per approach mouth, set back
+ *  from the junction trim (IRC practice: crossing just behind the mouth). */
+export function suggestZebras(
+  g: GraphState,
+  existing: StreetElement[],
+  trims: Record<string, { start: number; end: number }>,
+): Array<Omit<StreetElement, 'id'>> {
+  const out: Array<Omit<StreetElement, 'id'>> = [];
+  const crossings = existing.filter((e) => e.kind === 'zebra' || e.kind === 'raisedcrossing');
+  const deg: Record<string, number> = {};
+  for (const e of Object.values(g.edges)) {
+    deg[e.a] = (deg[e.a] ?? 0) + 1;
+    deg[e.b] = (deg[e.b] ?? 0) + 1;
+  }
+  const W = DEFAULT_WIDTH.zebra!;
+  const SETBACK = 2.5; // mouth → near edge of the crossing
+  for (const e of Object.values(g.edges)) {
+    if (!e.section || !drivableSpan(e.section)) continue;
+    const L = polylineLength(e.points);
+    const cands: number[] = [];
+    if ((deg[e.a] ?? 0) >= 3) cands.push((trims[e.id]?.start ?? 0) + SETBACK + W / 2);
+    if ((deg[e.b] ?? 0) >= 3) cands.push(L - (trims[e.id]?.end ?? 0) - SETBACK - W / 2);
+    for (const s of cands) {
+      if (s < 1 || s > L - 1) continue;
+      const clash = crossings.some((x) => x.edgeId === e.id && Math.abs(x.stationM - s) < 8);
+      if (!clash) {
+        out.push({ kind: 'zebra', edgeId: e.id, stationM: s, compIndex: -1, t: 0.5, widthM: W, placedBy: 'suggest' });
+      }
+    }
+  }
+  return out;
+}
+
+/** Bus stops seeded from the OSM bus-stop nodes in the last download. */
+export function suggestBusStops(
+  g: GraphState,
+  stops: Array<{ x: number; y: number }>,
+  existing: StreetElement[],
+): Array<Omit<StreetElement, 'id'>> {
+  const out: Array<Omit<StreetElement, 'id'>> = [];
+  const taken = existing.filter((e) => e.kind === 'busstop');
+  for (const p of stops) {
+    const place = resolveDrop(g, 'busstop', p.x, p.y, 30);
+    if (!place) continue;
+    const clash = [...taken, ...out].some(
+      (x) => x.edgeId === place.edgeId && Math.abs(x.stationM - place.stationM) < 15,
+    );
+    if (!clash) out.push({ kind: 'busstop', ...place, placedBy: 'suggest' });
+  }
+  return out;
+}
+
 /** Whether an element's anchor still exists (edge present, component in range). */
 export function isElementValid(edge: StreetEdge | undefined, el: StreetElement): boolean {
   if (!edge?.section) return false;
