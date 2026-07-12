@@ -10,6 +10,7 @@ export function ExportPanel() {
   const junctionDesigns = useCst((s) => s.junctionDesigns);
   const elements = useCst((s) => s.elements);
   const patches = useCst((s) => s.patches);
+  const boundaries = useCst((s) => s.boundaries);
   const exportBounds = useCst((s) => s.exportBounds);
   const boxDraw = useCst((s) => s.boxDraw);
   const setBoxDraw = useCst((s) => s.setBoxDraw);
@@ -28,8 +29,9 @@ export function ExportPanel() {
         junctionDesigns,
         Object.values(elements),
         Object.values(patches),
+        Object.values(boundaries),
       ),
-    [nodes, edges, junctionDesigns, elements, patches],
+    [nodes, edges, junctionDesigns, elements, patches, boundaries],
   );
   const plan = useMemo(
     () =>

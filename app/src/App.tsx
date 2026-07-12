@@ -64,6 +64,7 @@ export default function App() {
         s.selectAll();
       } else if (e.key === 'Escape') {
         if (s.boxDraw) s.setBoxDraw(null);
+        else if (s.boundaryDraw) s.cancelBoundary();
         else if (s.draft.length > 0) s.cancelDraft();
         else if (s.patchDraft.length > 0) s.cancelPatch();
         else if (s.patchKind) s.setPatchKind(null);
@@ -71,7 +72,10 @@ export default function App() {
         else if (s.tool !== 'select') s.setTool('select');
         else if (s.selectedElementId) s.selectElement(null);
         else if (s.selectedJunctionKey) s.selectJunction(null);
+        else if (s.selectedBoundaryId) s.selectBoundary(null);
         else s.selectEdge(null);
+      } else if (e.key === 'Enter' && s.boundaryDraw && s.boundaryDraft.length >= 4) {
+        s.finishBoundary();
       } else if (e.key === 'Enter' && s.draft.length >= 2) {
         s.finishDraft(0.5);
       } else if (e.key === 'Enter' && s.patchDraft.length >= 6) {
@@ -79,6 +83,7 @@ export default function App() {
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (s.selectedPatchId) s.removePatch(s.selectedPatchId);
         else if (s.selectedElementId) s.removeElement(s.selectedElementId);
+        else if (s.selectedBoundaryId) s.removeBoundary(s.selectedBoundaryId);
         else if (s.selectedEdgeIds.length > 0) s.removeEdges(s.selectedEdgeIds);
       } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (STAGE_KEYS[k]) {

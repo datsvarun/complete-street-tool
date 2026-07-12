@@ -18,6 +18,8 @@ const slice: DocumentSlice = {
   nextElementNum: 2,
   patches: {},
   nextPatchNum: 1,
+  boundaries: { b1: { id: 'b1', points: [0, 0, 10, 2, 20, -1] } },
+  nextBoundaryNum: 2,
   busStops: [{ x: 5, y: 5, name: 'Stop A' }],
 };
 

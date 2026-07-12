@@ -21,6 +21,9 @@ export function NetworkPanel() {
   const importOsmBbox = useCst((s) => s.importOsmBbox);
   const importFilters = useCst((s) => s.importFilters);
   const setImportFilter = useCst((s) => s.setImportFilter);
+  const boundaryDraw = useCst((s) => s.boundaryDraw);
+  const setBoundaryDraw = useCst((s) => s.setBoundaryDraw);
+  const boundaryCount = useCst((s) => Object.keys(s.boundaries).length);
   const setBoxDraw = useCst((s) => s.setBoxDraw);
   const boxDraw = useCst((s) => s.boxDraw);
   const importBox = useCst((s) => s.importBox);
@@ -102,6 +105,18 @@ export function NetworkPanel() {
         </button>
       </div>
       <p className="muted small">Replaces the current network. Data © OpenStreetMap contributors.</p>
+
+      <h3>Plot / ROW boundary</h3>
+      <p className="muted small">
+        Trace compound walls and plot lines first — the land you actually have —
+        then design the street inside them.
+      </p>
+      <div className="tool-row">
+        <button className={boundaryDraw ? 'active' : ''} onClick={() => setBoundaryDraw(!boundaryDraw)}>
+          {boundaryDraw ? 'Click on canvas…' : 'Trace boundary'}
+        </button>
+        {boundaryCount > 0 && <span className="muted small">{boundaryCount} traced</span>}
+      </div>
 
       <h3>Clean</h3>
       <div className="tool-row">

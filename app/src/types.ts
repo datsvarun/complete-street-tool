@@ -135,6 +135,16 @@ export interface StreetElement {
   placedBy?: 'user' | 'suggest';
 }
 
+// ── Network: traced land-ownership / ROW boundaries ─────────────────────
+// Indian street edges are jagged (compound walls jutting in and out). The
+// user traces these plot lines FIRST so the design happens inside real land
+// constraints. Pure reference geometry: never part of the graph, never
+// sectioned — just drawn, rendered, and exported.
+export interface Boundary {
+  id: string;
+  points: number[]; // flat [x0, y0, ...] polyline, world metres
+}
+
 // ── Stage 3.5 edit: free-form shape patches ─────────────────────────────
 // The escape hatch for geometry the parametric pipeline can't express:
 // compound walls, odd plot lines, hand-tuned corners. A patch is a closed

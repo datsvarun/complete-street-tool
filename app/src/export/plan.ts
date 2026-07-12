@@ -1,7 +1,7 @@
 // Stage 4 export: serialize the full design to a self-contained SVG plan.
 // Reuses the exact derivation the canvas uses (buildEdgeGeometry, junction
 // artifacts, element graphics) so the printed drawing matches the screen.
-import type { GraphState, JunctionDesign, Patch, StreetElement } from '../types';
+import type { Boundary, GraphState, JunctionDesign, Patch, StreetElement } from '../types';
 import { KIND_COLORS } from '../catalog';
 import { buildEdgeGeometry } from '../sections/transition';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
@@ -32,6 +32,7 @@ export function planContent(
   designs: Record<string, JunctionDesign>,
   elements: StreetElement[],
   patches: Patch[] = [],
+  boundaries: Boundary[] = [],
 ): string {
   const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs);
   const out: string[] = [];
@@ -91,6 +92,11 @@ export function planContent(
         0.12,
       ),
     );
+  }
+
+  // 7. traced plot / ROW boundaries — dashed survey-style lines on top
+  for (const b of boundaries) {
+    out.push(pline(b.points, '#8a5a2b', 0.3, [2.2, 1, 0.5, 1]));
   }
 
   return out.join('\n');

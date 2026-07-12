@@ -3,7 +3,7 @@
 // geometry outside it is derived, so a document round-trip is lossless by
 // construction. Version the schema from day one; loaders default missing
 // fields and reject only structural nonsense.
-import type { GraphState, JunctionDesign, Patch, StreetElement } from './types';
+import type { Boundary, GraphState, JunctionDesign, Patch, StreetElement } from './types';
 import type { BusStopPoint, LatLon } from './osm/overpass';
 
 export const DOC_VERSION = 1;
@@ -17,6 +17,8 @@ export interface CstDocument extends GraphState {
   nextElementNum: number;
   patches: Record<string, Patch>;
   nextPatchNum: number;
+  boundaries: Record<string, Boundary>;
+  nextBoundaryNum: number;
   busStops: BusStopPoint[];
 }
 
@@ -38,6 +40,8 @@ export function toDocument(s: DocumentSlice): CstDocument {
     nextElementNum: s.nextElementNum,
     patches: s.patches,
     nextPatchNum: s.nextPatchNum,
+    boundaries: s.boundaries,
+    nextBoundaryNum: s.nextBoundaryNum,
     busStops: s.busStops,
   };
 }
@@ -88,6 +92,8 @@ export function fromDocument(raw: unknown): DocumentSlice | string {
     nextElementNum: num(raw.nextElementNum, maxNum(Object.keys(isRecord(raw.elements) ? raw.elements : {}), 'x')),
     patches: isRecord(raw.patches) ? (raw.patches as Record<string, Patch>) : {},
     nextPatchNum: num(raw.nextPatchNum, maxNum(Object.keys(isRecord(raw.patches) ? raw.patches : {}), 'p')),
+    boundaries: isRecord(raw.boundaries) ? (raw.boundaries as Record<string, Boundary>) : {},
+    nextBoundaryNum: num(raw.nextBoundaryNum, maxNum(Object.keys(isRecord(raw.boundaries) ? raw.boundaries : {}), 'b')),
     busStops: Array.isArray(raw.busStops) ? (raw.busStops as BusStopPoint[]) : [],
   };
 }

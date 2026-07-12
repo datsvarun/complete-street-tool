@@ -10,7 +10,7 @@ import { buildEdgeGeometry } from '../sections/transition';
 import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts, pointInPolygon } from '../geometry/polyline';
 import { BasemapFab, ScaleBar, CompassRose } from './FloatingUI';
 import { nodeClassOf } from '../types';
-import type { GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
+import type { Boundary, GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { elementGraphics, laneDividers } from '../detailing/elements';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
@@ -142,6 +142,9 @@ function EdgeShape({
   }, [edge.points, section, showSections]);
   const onClick = (e: KonvaEventObject<MouseEvent>) => {
     const st = useCst.getState();
+    // Boundary tracing / box drawing own every click — let it bubble to the
+    // stage handler instead of selecting the street underneath.
+    if (st.boundaryDraw || st.boxDraw) return;
     // Detailing: a click on the ribbon should place/select an element, not fall
     // through to edge selection — the band would otherwise eat the placement.
     if (st.stage === 'detailing') {
@@ -744,6 +747,90 @@ function PatchesLayerImpl({
 }
 const PatchesLayer = memo(PatchesLayerImpl);
 
+/** Traced land-ownership / ROW boundaries: dashed plot lines rendered in every
+ *  stage, editable (select, drag vertices, right-click) in the network stage. */
+function BoundariesLayerImpl({
+  boundaries,
+  interactive,
+  selectedBoundaryId,
+  scale,
+}: {
+  boundaries: Boundary[];
+  interactive: boolean;
+  selectedBoundaryId: string | null;
+  scale: number;
+}) {
+  const selectBoundary = useCst((s) => s.selectBoundary);
+  const removeBoundary = useCst((s) => s.removeBoundary);
+  const moveBoundaryVertex = useCst((s) => s.moveBoundaryVertex);
+  const removeBoundaryVertex = useCst((s) => s.removeBoundaryVertex);
+  const r = 4 / scale;
+  return (
+    <Layer listening={interactive}>
+      {boundaries.map((b) => (
+        <Line
+          key={b.id}
+          points={b.points}
+          stroke={b.id === selectedBoundaryId ? '#e08e45' : '#8a5a2b'}
+          strokeWidth={b.id === selectedBoundaryId ? 2.2 : 1.6}
+          dash={[9, 4, 2, 4]}
+          strokeScaleEnabled={false}
+          hitStrokeWidth={12}
+          onClick={(ev) => {
+            const t = useCst.getState().tool;
+            if (!interactive) return;
+            ev.cancelBubble = true;
+            if (t === 'erase') removeBoundary(b.id);
+            else selectBoundary(b.id);
+          }}
+          onContextMenu={(ev) => {
+            ev.evt.preventDefault();
+            ev.cancelBubble = true;
+            removeBoundary(b.id);
+          }}
+          {...(interactive ? hoverCursor('pointer') : {})}
+        />
+      ))}
+      {interactive &&
+        selectedBoundaryId &&
+        boundaries
+          .filter((b) => b.id === selectedBoundaryId)
+          .flatMap((b) => {
+            const out: React.ReactNode[] = [];
+            for (let i = 0; i * 2 < b.points.length; i++) {
+              out.push(
+                <Circle
+                  key={`${b.id}-v${i}`}
+                  x={b.points[i * 2]}
+                  y={b.points[i * 2 + 1]}
+                  radius={r}
+                  fill="#fff"
+                  stroke="#8a5a2b"
+                  strokeWidth={1.5}
+                  strokeScaleEnabled={false}
+                  draggable
+                  {...hoverCursor('move')}
+                  onDragStart={() => useCst.temporal.getState().pause()}
+                  onDragMove={(ev) => moveBoundaryVertex(b.id, i, ev.target.x(), ev.target.y())}
+                  onDragEnd={(ev) => {
+                    useCst.temporal.getState().resume();
+                    moveBoundaryVertex(b.id, i, ev.target.x(), ev.target.y());
+                  }}
+                  onContextMenu={(ev) => {
+                    ev.evt.preventDefault();
+                    ev.cancelBubble = true;
+                    removeBoundaryVertex(b.id, i);
+                  }}
+                />,
+              );
+            }
+            return out;
+          })}
+    </Layer>
+  );
+}
+const BoundariesLayer = memo(BoundariesLayerImpl);
+
 const TURN_COLORS: Record<string, string> = {
   through: '#4a90d9',
   left: '#4CAF50',
@@ -876,6 +963,10 @@ export function CanvasStage() {
   const placeKind = useCst((s) => s.placeKind);
   const selectedElementId = useCst((s) => s.selectedElementId);
   const patches = useCst((s) => s.patches);
+  const boundaries = useCst((s) => s.boundaries);
+  const boundaryDraw = useCst((s) => s.boundaryDraw);
+  const boundaryDraft = useCst((s) => s.boundaryDraft);
+  const selectedBoundaryId = useCst((s) => s.selectedBoundaryId);
   const boxDraw = useCst((s) => s.boxDraw);
   const importBox = useCst((s) => s.importBox);
   const exportBounds = useCst((s) => s.exportBounds);
@@ -893,6 +984,7 @@ export function CanvasStage() {
   const nodeList = useMemo(() => Object.values(nodes), [nodes]);
   const elementList = useMemo(() => Object.values(elements), [elements]);
   const patchList = useMemo(() => Object.values(patches), [patches]);
+  const boundaryList = useMemo(() => Object.values(boundaries), [boundaries]);
   // Only the network stage renders nodes — don't pay O(nodes × edges) elsewhere.
   const degrees = useMemo(() => {
     const d: Record<string, number> = {};
@@ -1055,6 +1147,11 @@ export function CanvasStage() {
     // Box-draw owns the gesture end-to-end (mousedown/move/up); a click that
     // completes or cancels a box must not also run a tool/place action.
     if (boxDraw) return;
+    if (boundaryDraw) {
+      const w = toWorld(stageNode);
+      if (w) useCst.getState().addBoundaryVert(w.x, w.y);
+      return;
+    }
     if (tool === 'draw') {
       const w = toWorld(stageNode);
       if (!w) return;
@@ -1110,6 +1207,20 @@ export function CanvasStage() {
   // double-click is stationary: the last two draft points (click fires before
   // dblclick, so the duplicate is already in the draft) nearly coincide on screen.
   const onDblClick = () => {
+    if (boundaryDraw) {
+      // Same stationary-dblclick rule as street drawing: Konva synthesizes
+      // dblclick from ANY two clicks in its window, so only finish when the
+      // last two clicks landed on (nearly) the same spot.
+      const st = useCst.getState();
+      const d = st.boundaryDraft;
+      if (
+        d.length >= 6 &&
+        dist(d[d.length - 4], d[d.length - 3], d[d.length - 2], d[d.length - 1]) * view.scale < 6
+      ) {
+        st.finishBoundary();
+      }
+      return;
+    }
     if (stage === 'edit') {
       const st = useCst.getState();
       if (st.patchDraft.length >= 6) st.finishPatch();
@@ -1145,7 +1256,9 @@ export function CanvasStage() {
   };
   const hint = boxDraw
     ? `Drag a rectangle to set the ${boxDraw} area · Esc cancels`
-    : TOOL_HINTS[tool] ?? STAGE_HINTS[stage] ?? '';
+    : boundaryDraw
+      ? 'Click along the plot/compound-wall line · double-click or Enter finishes · Esc cancels'
+      : TOOL_HINTS[tool] ?? STAGE_HINTS[stage] ?? '';
 
   const previewPoints =
     tool === 'draw' && draft.length >= 1 && cursor
@@ -1162,7 +1275,7 @@ export function CanvasStage() {
       className={basemapActive ? 'canvas-host with-basemap' : 'canvas-host'}
       style={{
         cursor:
-          tool === 'draw' || tool === 'marquee' || tool === 'lasso' || !!boxDraw || (stage === 'edit' && patchKind)
+          tool === 'draw' || tool === 'marquee' || tool === 'lasso' || !!boxDraw || boundaryDraw || (stage === 'edit' && patchKind)
             ? 'crosshair'
             : tool === 'split' || tool === 'erase'
               ? 'cell'
@@ -1235,6 +1348,14 @@ export function CanvasStage() {
             draggable={tool === 'direct'}
           />
         )}
+        {boundaryList.length > 0 && (
+          <BoundariesLayer
+            boundaries={boundaryList}
+            interactive={stage === 'network'}
+            selectedBoundaryId={selectedBoundaryId}
+            scale={view.scale}
+          />
+        )}
         {focusedJunction && <JunctionHandlesLayer j={focusedJunction} scale={view.scale} />}
         {showSections && patchList.length > 0 && (
           <PatchesLayer
@@ -1257,6 +1378,15 @@ export function CanvasStage() {
         <Layer listening={false}>
           {draftFlat.length >= 4 && (
             <Line points={draftFlat} stroke="#b3541e" strokeWidth={2} strokeScaleEnabled={false} />
+          )}
+          {boundaryDraw && boundaryDraft.length >= 2 && (
+            <Line
+              points={cursor ? [...boundaryDraft, cursor.x, cursor.y] : boundaryDraft}
+              stroke="#8a5a2b"
+              strokeWidth={1.8}
+              dash={[9, 4, 2, 4]}
+              strokeScaleEnabled={false}
+            />
           )}
           {stage === 'edit' && patchDraft.length >= 2 && (
             <Line

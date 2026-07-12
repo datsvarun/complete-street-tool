@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
 import type {
+  Boundary,
   DcCandidate,
   DraftVert,
   ElementKind,
@@ -67,6 +68,12 @@ interface CstState extends GraphState {
   placeKind: ElementKind | null;      // active palette tool (UI state)
   placeVariant: string | null;        // e.g. turn arrow direction
   selectedElementId: string | null;
+  /** Traced land-ownership / ROW boundary polylines (undoable) + draw state (not). */
+  boundaries: Record<string, Boundary>;
+  nextBoundaryNum: number;
+  boundaryDraw: boolean;              // tracing mode armed
+  boundaryDraft: number[];            // in-progress polyline
+  selectedBoundaryId: string | null;
   /** Stage 3.5 edit: free-form patches (undoable) + drawing state (not). */
   patches: Record<string, Patch>;
   nextPatchNum: number;
@@ -140,6 +147,14 @@ interface CstState extends GraphState {
   clearSuggestions: () => void;
   setEdgeLanes: (edgeId: string, lanes: number) => void;
   selectJunction: (key: string | null) => void;
+  setBoundaryDraw: (on: boolean) => void;
+  addBoundaryVert: (x: number, y: number) => void;
+  finishBoundary: () => void;
+  cancelBoundary: () => void;
+  removeBoundary: (id: string) => void;
+  selectBoundary: (id: string | null) => void;
+  moveBoundaryVertex: (id: string, idx: number, x: number, y: number) => void;
+  removeBoundaryVertex: (id: string, idx: number) => void;
   setPatchKind: (kind: PatchKind | null) => void;
   addPatchVert: (x: number, y: number) => void;
   finishPatch: () => void;
@@ -224,6 +239,11 @@ export const useCst = create<CstState>()(
       placeKind: null,
       placeVariant: null,
       selectedElementId: null,
+      boundaries: {},
+      nextBoundaryNum: 1,
+      boundaryDraw: false,
+      boundaryDraft: [],
+      selectedBoundaryId: null,
       patches: {},
       nextPatchNum: 1,
       patchKind: null,
@@ -253,6 +273,8 @@ export const useCst = create<CstState>()(
           draft: [],
           highlightEdges: [],
           boxDraw: null,
+          boundaryDraw: false,
+          boundaryDraft: [],
           patchDraft: [],
           patchKind: null,
           placeKind: null,
@@ -268,10 +290,18 @@ export const useCst = create<CstState>()(
           if (fresh) get().autoAssign();
         }
       },
-      // Picking a tool exits box-draw mode; arming a box (setBoxDraw) forces the
-      // select tool. Together these keep box-draw and the tools mutually
-      // exclusive, so one gesture can never trigger two modes.
-      setTool: (tool) => set((s) => ({ tool, boxDraw: null, draft: tool === 'draw' ? s.draft : [] })),
+      // Picking a tool exits box-draw and boundary-trace modes; arming either
+      // mode (setBoxDraw/setBoundaryDraw) forces the select tool. Together
+      // these keep the drawing modes and the tools mutually exclusive, so one
+      // gesture can never trigger two modes.
+      setTool: (tool) =>
+        set((s) => ({
+          tool,
+          boxDraw: null,
+          boundaryDraw: false,
+          boundaryDraft: [],
+          draft: tool === 'draw' ? s.draft : [],
+        })),
 
       addDraftVert: (v) => set((s) => ({ draft: [...s.draft, v] })),
 
@@ -608,6 +638,8 @@ export const useCst = create<CstState>()(
         set({
           boxDraw: purpose,
           tool: 'select', // box-draw and the drawing tools are mutually exclusive
+          boundaryDraw: false,
+          boundaryDraft: [],
           statusMsg: purpose ? `drag a rectangle on the canvas to set the ${purpose} area` : '',
         }),
 
@@ -803,6 +835,73 @@ export const useCst = create<CstState>()(
 
       selectJunction: (key) => set({ selectedJunctionKey: key }),
 
+      setBoundaryDraw: (on) =>
+        set({
+          boundaryDraw: on,
+          boundaryDraft: [],
+          tool: 'select', // exclusive with the drawing tools, like box-draw
+          boxDraw: null,
+          selectedBoundaryId: null,
+          statusMsg: on ? 'click along the plot/compound-wall line · double-click or Enter finishes' : '',
+        }),
+
+      addBoundaryVert: (x, y) => set((s) => ({ boundaryDraft: [...s.boundaryDraft, x, y] })),
+
+      finishBoundary: () =>
+        set((s) => {
+          let pts = s.boundaryDraft;
+          // A finishing double-click leaves a duplicated tail vertex — trim it.
+          while (
+            pts.length >= 6 &&
+            Math.hypot(pts[pts.length - 2] - pts[pts.length - 4], pts[pts.length - 1] - pts[pts.length - 3]) < 0.05
+          ) {
+            pts = pts.slice(0, -2);
+          }
+          if (pts.length < 4) return { boundaryDraft: [] };
+          const id = `b${s.nextBoundaryNum}`;
+          return {
+            boundaries: { ...s.boundaries, [id]: { id, points: pts } },
+            nextBoundaryNum: s.nextBoundaryNum + 1,
+            boundaryDraft: [],
+            selectedBoundaryId: id,
+            statusMsg: 'boundary traced — drag its vertices to refine, right-click removes',
+          };
+        }),
+
+      cancelBoundary: () => set({ boundaryDraft: [], boundaryDraw: false }),
+
+      removeBoundary: (id) =>
+        set((s) => {
+          const boundaries = { ...s.boundaries };
+          delete boundaries[id];
+          return {
+            boundaries,
+            selectedBoundaryId: s.selectedBoundaryId === id ? null : s.selectedBoundaryId,
+            statusMsg: 'boundary removed',
+          };
+        }),
+
+      selectBoundary: (id) => set({ selectedBoundaryId: id }),
+
+      moveBoundaryVertex: (id, idx, x, y) =>
+        set((s) => {
+          const b = s.boundaries[id];
+          if (!b || idx < 0 || idx * 2 >= b.points.length) return {};
+          const points = b.points.slice();
+          points[idx * 2] = x;
+          points[idx * 2 + 1] = y;
+          return { boundaries: { ...s.boundaries, [id]: { ...b, points } } };
+        }),
+
+      removeBoundaryVertex: (id, idx) =>
+        set((s) => {
+          const b = s.boundaries[id];
+          if (!b || b.points.length <= 4) return {};
+          const points = b.points.slice();
+          points.splice(idx * 2, 2);
+          return { boundaries: { ...s.boundaries, [id]: { ...b, points } } };
+        }),
+
       setPatchKind: (kind) => set({ patchKind: kind, patchDraft: [], selectedPatchId: null }),
 
       addPatchVert: (x, y) => set((s) => ({ patchDraft: [...s.patchDraft, x, y] })),
@@ -882,6 +981,8 @@ export const useCst = create<CstState>()(
               s.selectedElementId && s.elements[s.selectedElementId] ? s.selectedElementId : null,
             selectedPatchId:
               s.selectedPatchId && s.patches[s.selectedPatchId] ? s.selectedPatchId : null,
+            selectedBoundaryId:
+              s.selectedBoundaryId && s.boundaries[s.selectedBoundaryId] ? s.selectedBoundaryId : null,
             selectedJunctionKey: junctionAlive ? s.selectedJunctionKey : null,
           };
         }),
@@ -952,10 +1053,13 @@ export const useCst = create<CstState>()(
           selectedElementId: null,
           selectedJunctionKey: null,
           selectedPatchId: null,
+          selectedBoundaryId: null,
           placeKind: null,
           patchKind: null,
           patchDraft: [],
           draft: [],
+          boundaryDraw: false,
+          boundaryDraft: [],
           boxDraw: null,
           importBox: null,
           exportBounds: null,
@@ -980,6 +1084,11 @@ export const useCst = create<CstState>()(
           nextElementNum: 1,
           patches: {},
           nextPatchNum: 1,
+          boundaries: {},
+          nextBoundaryNum: 1,
+          boundaryDraw: false,
+          boundaryDraft: [],
+          selectedBoundaryId: null,
           busStops: [],
           selectedEdgeId: null,
           selectedEdgeIds: [],
@@ -1016,13 +1125,16 @@ export const useCst = create<CstState>()(
         nextElementNum: s.nextElementNum,
         patches: s.patches,
         nextPatchNum: s.nextPatchNum,
+        boundaries: s.boundaries,
+        nextBoundaryNum: s.nextBoundaryNum,
       }),
       equality: (a, b) =>
         a.nodes === b.nodes &&
         a.edges === b.edges &&
         a.junctionDesigns === b.junctionDesigns &&
         a.elements === b.elements &&
-        a.patches === b.patches,
+        a.patches === b.patches &&
+        a.boundaries === b.boundaries,
       limit: 100,
     },
   ),
@@ -1054,6 +1166,7 @@ if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       s.junctionDesigns === prev.junctionDesigns &&
       s.elements === prev.elements &&
       s.patches === prev.patches &&
+      s.boundaries === prev.boundaries &&
       s.busStops === prev.busStops
     ) {
       return;
