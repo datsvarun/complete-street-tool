@@ -22,6 +22,8 @@ export function EditPanel() {
   const selectedShapeKey = useCst((s) => s.selectedShapeKey);
   const selectShape = useCst((s) => s.selectShape);
   const clearShapeOverrides = useCst((s) => s.clearShapeOverrides);
+  const meshEdit = useCst((s) => s.meshEdit);
+  const setMeshEdit = useCst((s) => s.setMeshEdit);
   const patchKind = useCst((s) => s.patchKind);
   const setPatchKind = useCst((s) => s.setPatchKind);
   const patchDraft = useCst((s) => s.patchDraft);
@@ -53,10 +55,22 @@ export function EditPanel() {
       <h3>Node editing</h3>
       <p className="muted small">
         Click any <strong>generated</strong> surface (band, junction, wedge) to
-        outline it, then drag its nodes. Nudges are stored parametrically — they
-        ride along when the street moves or resizes, and drop out if their shape
-        disappears. Right-click a node resets it.
+        outline it, then drag its nodes. <strong>Green nodes are shared mesh
+        nodes</strong> — abutting shapes (footpath ↔ carriageway, band ↔
+        junction) move together, so sub-polygons never tear apart. Nudges are
+        stored parametrically — they ride along when the street moves or
+        resizes. Right-click a node resets it. Nodes snap to traced plot
+        boundaries.
       </p>
+      <label className="prop-row small">
+        <span>Welded mesh editing</span>
+        <input
+          type="checkbox"
+          checked={meshEdit}
+          onChange={(e) => setMeshEdit(e.target.checked)}
+          title="Off: a drag moves only the selected shape's vertex (shapes can separate)"
+        />
+      </label>
       {selectedShapeKey && (
         <p className="small">
           Editing <strong>{selectedShapeKey}</strong>{' '}

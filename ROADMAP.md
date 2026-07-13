@@ -39,6 +39,7 @@ deploy:pages` then push (GitHub Pages, deploy-from-branch).
 | Street-tool overhaul (kind merges → MUZ/Green Buffer/Bus lane, Standard rule-of-thirds sections, mini cross-section catalog, in-place component swap, manual centerline) | **shipped** |
 | Detailing depth v1 (object properties, shape-fit selection, band snapping, c/c spacing, parking/cycle decals, LHT turn-arrow suggest) | **shipped** — full per-object toolset still open |
 | **GeoJSON export** (WGS84 FeatureCollection, layer-tagged) | **shipped** — DXF designed in `Export_Design.md` |
+| **Welded node-mesh editing** (shared nodes move all abutting generated polygons) | **shipped v1** — `Mesh_Architecture.md`; global mesh view + T-junction welds are v2; pending reconciliation with the user's local MESH_INTEGRATION_SPEC |
 | CAD P2 generic `<HandleLayer>` refactor | **not started** — next structural cleanup |
 | Junctions J5–J7 (signal/priority templates, full roundabout, probe/validation) | **not started** |
 | Detailing depth (element properties, signs, signals) | **partial** |

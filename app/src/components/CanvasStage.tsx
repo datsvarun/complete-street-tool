@@ -13,7 +13,9 @@ import { nodeClassOf } from '../types';
 import type { Boundary, GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { bandDecals, elementGraphics, laneDividers } from '../detailing/elements';
 import { edgesInRect, edgesNear } from '../geometry/spatialIndex';
-import { applyShapeOverrides, deltaForDrag } from '../cad/vertexOverrides';
+import { applyShapeOverrides } from '../cad/vertexOverrides';
+import { weldMapFor, weldedDragDeltas } from '../cad/mesh';
+import type { MeshMember } from '../cad/mesh';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { EdgeTrim, JunctionPoly, NodeArtifacts } from '../graph/junctions';
@@ -1038,13 +1040,27 @@ function BoundariesLayerImpl({
 const BoundariesLayer = memo(BoundariesLayerImpl);
 
 /** CAD vertex editing (Edit stage): every vertex of the selected generated
- *  shape becomes a handle. Drags store parametric (along, across) deltas by
- *  perimeter-fraction key — the geometry itself stays derived. Right-click a
- *  vertex resets its nudge. */
-function ShapeEditLayer({ shapeKey, base, scale }: { shapeKey: string; base: number[]; scale: number }) {
+ *  shape becomes a handle. With welded-mesh editing on, coincident vertices
+ *  of ABUTTING shapes (footpath edge = carriageway edge, band mouth =
+ *  junction cap) form shared nodes — dragging one moves every member, so
+ *  adjacent sub-polygons reshape together and never tear. Drags store
+ *  parametric (along, across) deltas per member shape — geometry stays
+ *  derived. Right-click a node resets it (all members). */
+function ShapeEditLayer({
+  shapeKey,
+  base,
+  weldMap,
+  scale,
+}: {
+  shapeKey: string;
+  base: number[];
+  weldMap: MeshMember[][];
+  scale: number;
+}) {
   const vertexOverrides = useCst((s) => s.vertexOverrides);
-  const setVertexDelta = useCst((s) => s.setVertexDelta);
-  const removeVertexDelta = useCst((s) => s.removeVertexDelta);
+  const meshEdit = useCst((s) => s.meshEdit);
+  const setVertexDeltas = useCst((s) => s.setVertexDeltas);
+  const removeVertexDeltas = useCst((s) => s.removeVertexDeltas);
   const display = applyShapeOverrides(base, vertexOverrides[shapeKey]);
   const r = 4 / scale;
   const n = display.length / 2;
@@ -1063,8 +1079,16 @@ function ShapeEditLayer({ shapeKey, base, scale }: { shapeKey: string; base: num
         }
       }
     }
-    const { key, delta } = deltaForDrag(base, st.vertexOverrides[shapeKey], i, wx, wy);
-    setVertexDelta(shapeKey, key, delta);
+    const entries = weldedDragDeltas(
+      shapeKey,
+      base,
+      st.meshEdit ? weldMap : [],
+      st.vertexOverrides,
+      i,
+      wx,
+      wy,
+    );
+    setVertexDeltas(entries);
   };
   return (
     <Layer>
@@ -1077,38 +1101,46 @@ function ShapeEditLayer({ shapeKey, base, scale }: { shapeKey: string; base: num
         strokeScaleEnabled={false}
         listening={false}
       />
-      {Array.from({ length: n }, (_, i) => (
-        <Circle
-          key={i}
-          x={display[i * 2]}
-          y={display[i * 2 + 1]}
-          radius={r}
-          fill="#fff"
-          stroke="#b3541e"
-          strokeWidth={1.5}
-          strokeScaleEnabled={false}
-          draggable
-          {...hoverCursor('move')}
-          onDragStart={() => useCst.temporal.getState().pause()}
-          onDragMove={(ev) => dragTo(i, ev.target.x(), ev.target.y())}
-          onDragEnd={(ev) => {
-            useCst.temporal.getState().resume();
-            dragTo(i, ev.target.x(), ev.target.y());
-          }}
-          onContextMenu={(ev) => {
-            ev.evt.preventDefault();
-            ev.cancelBubble = true;
-            const { key } = deltaForDrag(
-              base,
-              useCst.getState().vertexOverrides[shapeKey],
-              i,
-              base[i * 2],
-              base[i * 2 + 1],
-            );
-            removeVertexDelta(shapeKey, key);
-          }}
-        />
-      ))}
+      {Array.from({ length: n }, (_, i) => {
+        const welded = meshEdit && (weldMap[i]?.length ?? 0) > 0;
+        return (
+          <Circle
+            key={i}
+            x={display[i * 2]}
+            y={display[i * 2 + 1]}
+            radius={welded ? r * 1.15 : r}
+            // green = shared mesh node (moves every abutting shape)
+            fill={welded ? '#dff2e4' : '#fff'}
+            stroke={welded ? '#0a8f4b' : '#b3541e'}
+            strokeWidth={1.5}
+            strokeScaleEnabled={false}
+            draggable
+            {...hoverCursor('move')}
+            onDragStart={() => useCst.temporal.getState().pause()}
+            onDragMove={(ev) => dragTo(i, ev.target.x(), ev.target.y())}
+            onDragEnd={(ev) => {
+              useCst.temporal.getState().resume();
+              dragTo(i, ev.target.x(), ev.target.y());
+            }}
+            onContextMenu={(ev) => {
+              ev.evt.preventDefault();
+              ev.cancelBubble = true;
+              // reset this node on the target AND every welded member
+              const st = useCst.getState();
+              const entries = weldedDragDeltas(
+                shapeKey,
+                base,
+                st.meshEdit ? weldMap : [],
+                st.vertexOverrides,
+                i,
+                base[i * 2],
+                base[i * 2 + 1],
+              ).map(({ shapeKey: sk, key }) => ({ shapeKey: sk, key }));
+              removeVertexDeltas(entries);
+            }}
+          />
+        );
+      })}
     </Layer>
   );
 }
@@ -1383,6 +1415,14 @@ export function CanvasStage() {
     }
     return null;
   }, [stage, selectedShapeKey, edges, artifacts]);
+
+  // Welded mesh for the shape being edited: which vertices of abutting
+  // generated shapes coincide with each of its vertices (Mesh_Architecture.md).
+  const selectedShapeWeld = useMemo(() => {
+    if (stage !== 'edit' || !selectedShapeKey || !selectedShapeBase) return [];
+    return weldMapFor({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, artifacts, selectedShapeKey);
+  }, [stage, selectedShapeKey, selectedShapeBase, nodes, edges, artifacts]);
+
 
   useEffect(() => {
     const el = containerRef.current!;
@@ -1821,7 +1861,12 @@ export function CanvasStage() {
         )}
         {focusedJunction && <JunctionHandlesLayer j={focusedJunction} scale={view.scale} />}
         {stage === 'edit' && selectedShapeKey && selectedShapeBase && (
-          <ShapeEditLayer shapeKey={selectedShapeKey} base={selectedShapeBase} scale={view.scale} />
+          <ShapeEditLayer
+            shapeKey={selectedShapeKey}
+            base={selectedShapeBase}
+            weldMap={selectedShapeWeld}
+            scale={view.scale}
+          />
         )}
         {showSections && patchList.length > 0 && layers.patches && (
           <PatchesLayer

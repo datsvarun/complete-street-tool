@@ -231,8 +231,14 @@ interface CstState extends GraphState {
   removeJunctionDesign: (jKey: string) => void;
   selectShape: (key: string | null) => void;
   setVertexDelta: (shapeKey: string, key: string, delta: VertexDelta) => void;
+  /** One undoable step writing deltas across MANY shapes — a welded-mesh drag. */
+  setVertexDeltas: (entries: Array<{ shapeKey: string; key: string; delta: VertexDelta }>) => void;
   removeVertexDelta: (shapeKey: string, key: string) => void;
+  removeVertexDeltas: (entries: Array<{ shapeKey: string; key: string }>) => void;
   clearShapeOverrides: (shapeKey: string) => void;
+  /** Edit stage: drag shared mesh nodes (all abutting shapes) vs single shape. */
+  meshEdit: boolean;
+  setMeshEdit: (on: boolean) => void;
   /** Replace the whole design with a saved/restored document (undo history resets). */
   loadDocument: (raw: unknown, label?: string) => void;
   /** Start over: empty graph, empty overlays, autosave cleared. */
@@ -310,6 +316,7 @@ export const useCst = create<CstState>()(
       selectedBoundaryId: null,
       vertexOverrides: {},
       selectedShapeKey: null,
+      meshEdit: true,
       patches: {},
       nextPatchNum: 1,
       patchKind: null,
@@ -1184,6 +1191,34 @@ export const useCst = create<CstState>()(
             [shapeKey]: { ...s.vertexOverrides[shapeKey], [key]: delta },
           },
         })),
+
+      setVertexDeltas: (entries) =>
+        set((s) => {
+          if (entries.length === 0) return {};
+          const vertexOverrides = { ...s.vertexOverrides };
+          for (const e of entries) {
+            vertexOverrides[e.shapeKey] = { ...vertexOverrides[e.shapeKey], [e.key]: e.delta };
+          }
+          return { vertexOverrides };
+        }),
+
+      removeVertexDeltas: (entries) =>
+        set((s) => {
+          const vertexOverrides = { ...s.vertexOverrides };
+          let changed = false;
+          for (const e of entries) {
+            const shape = vertexOverrides[e.shapeKey];
+            if (!shape || !(e.key in shape)) continue;
+            changed = true;
+            const next = { ...shape };
+            delete next[e.key];
+            if (Object.keys(next).length === 0) delete vertexOverrides[e.shapeKey];
+            else vertexOverrides[e.shapeKey] = next;
+          }
+          return changed ? { vertexOverrides, statusMsg: 'mesh node reset' } : {};
+        }),
+
+      setMeshEdit: (on) => set({ meshEdit: on }),
 
       removeVertexDelta: (shapeKey, key) =>
         set((s) => {
