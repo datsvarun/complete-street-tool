@@ -13,6 +13,7 @@ export function ExportPanel() {
   const patches = useCst((s) => s.patches);
   const boundaries = useCst((s) => s.boundaries);
   const vertexOverrides = useCst((s) => s.vertexOverrides);
+  const meshEdits = useCst((s) => s.meshEdits);
   const junctionBlend = useCst((s) => s.settings.junctionBlend);
   const exportBounds = useCst((s) => s.exportBounds);
   const boxDraw = useCst((s) => s.boxDraw);
@@ -35,8 +36,9 @@ export function ExportPanel() {
         Object.values(boundaries),
         vertexOverrides,
         junctionBlend,
+        meshEdits,
       ),
-    [nodes, edges, junctionDesigns, elements, patches, boundaries, vertexOverrides, junctionBlend],
+    [nodes, edges, junctionDesigns, elements, patches, boundaries, vertexOverrides, junctionBlend, meshEdits],
   );
   const plan = useMemo(
     () =>
@@ -91,6 +93,7 @@ export function ExportPanel() {
       Object.values(s.boundaries),
       vertexOverrides,
       junctionBlend,
+      meshEdits,
     );
     const blob = new Blob([json], { type: 'application/geo+json' });
     const url = URL.createObjectURL(blob);

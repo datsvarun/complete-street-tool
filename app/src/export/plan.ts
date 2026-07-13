@@ -9,6 +9,8 @@ import { bandDecals, elementGraphics, laneDividers } from '../detailing/elements
 import { graphBounds } from '../graph/ops';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
 import type { VertexOverrides } from '../cad/vertexOverrides';
+import { deriveMeshView, hasMeshEdits } from '../mesh/meshGeometry';
+import type { MeshEdits } from '../mesh/mesh';
 
 export function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -37,15 +39,25 @@ export function planContent(
   boundaries: Boundary[] = [],
   vertexOverrides: VertexOverrides = {},
   blend = true,
+  meshEdits: MeshEdits = {},
 ): string {
   const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
+  // Mesh edits reshape the welded shared-node geometry; the printed plan must
+  // match the screen (mesh polygons already carry vertexOverrides).
+  const meshView = hasMeshEdits(meshEdits)
+    ? deriveMeshView(g, designs, blend, vertexOverrides, meshEdits)
+    : null;
+  const finalPoly = (key: string, base: number[]) =>
+    meshView?.polygon(key) ?? applyShapeOverrides(base, vertexOverrides[key]);
   const out: string[] = [];
 
   // 1. carriageway surface + wedges + noses (junctions under ribbons)
   for (const j of junctions) {
-    for (const b of j.coverBands) out.push(poly(b, '#525e6a', 'none', 0));
+    j.coverBands.forEach((b, bi) =>
+      out.push(poly(meshView?.polygon(`jcover:${j.key}:${bi}`) ?? b, '#525e6a', 'none', 0)),
+    );
     out.push(
-      poly(applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]), '#525e6a', 'rgba(30,35,40,0.4)', 0.15),
+      poly(finalPoly(`jring:${j.key}`, j.polygon), '#525e6a', 'rgba(30,35,40,0.4)', 0.15),
     );
   }
 
@@ -54,7 +66,7 @@ export function planContent(
     if (!e.section) continue;
     const { bands, markings } = buildEdgeGeometry(e, trims[e.id]);
     for (const b of bands) {
-      const pts = applyShapeOverrides(b.polygon, vertexOverrides[`band:${e.id}:${b.key}`]);
+      const pts = finalPoly(`band:${e.id}:${b.key}`, b.polygon);
       out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
     }
     for (const m of markings) out.push(pline(m.line, '#f2f0e9', 0.2, m.dashed ? [1, 1] : undefined));
@@ -63,7 +75,7 @@ export function planContent(
   // 3. junction wedges / noses / transitions on top of ribbons
   for (const j of junctions) {
     for (const b of [...j.wedges, ...j.noses]) {
-      const pts = applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`]);
+      const pts = finalPoly(`jband:${j.key}:${b.key}`, b.polygon);
       out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
     }
     if (j.roundabout) {
@@ -75,7 +87,10 @@ export function planContent(
     }
   }
   for (const t of transitions) {
-    for (const b of t.bands) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
+    for (const b of t.bands) {
+      const pts = meshView?.polygon(`tband:${t.nodeId}:${b.key}`) ?? b.polygon;
+      out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
+    }
   }
 
   // 4. lane dividers + parametric decals (parking ticks, cycle chevrons)

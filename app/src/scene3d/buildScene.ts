@@ -9,6 +9,8 @@ import { deriveNodeArtifactsCached } from '../graph/junctions';
 import { buildEdgeGeometry } from '../sections/transition';
 import { elementFrame } from '../detailing/elements';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
+import { deriveMeshView, hasMeshEdits } from '../mesh/meshGeometry';
+import type { MeshEdits } from '../mesh/mesh';
 import type { VertexOverrides } from '../cad/vertexOverrides';
 import { graphBounds } from '../graph/ops';
 import type { Bounds } from '../store';
@@ -66,8 +68,16 @@ export function buildScene(
   patches: Patch[] = [],
   vertexOverrides: VertexOverrides = {},
   blend = true,
+  meshEdits: MeshEdits = {},
 ): SceneSpec {
   const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
+  // 3D prisms extrude the same final surfaces the plan shows: mesh-edited
+  // welded geometry when present (mesh polygons already carry vertexOverrides).
+  const meshView = hasMeshEdits(meshEdits)
+    ? deriveMeshView(g, designs, blend, vertexOverrides, meshEdits)
+    : null;
+  const finalPoly = (key: string, base: number[]) =>
+    meshView?.polygon(key) ?? applyShapeOverrides(base, vertexOverrides[key]);
   const prisms: ScenePrism[] = [];
   const posts: ScenePost[] = [];
 
@@ -78,7 +88,7 @@ export function buildScene(
     for (const b of bands) {
       prisms.push({
         key: `band:${e.id}:${b.key}`,
-        polygon: applyShapeOverrides(b.polygon, vertexOverrides[`band:${e.id}:${b.key}`]),
+        polygon: finalPoly(`band:${e.id}:${b.key}`, b.polygon),
         base: 0,
         height: KIND_HEIGHT[b.kind],
         color: KIND_COLORS[b.kind],
@@ -90,18 +100,24 @@ export function buildScene(
   for (const j of junctions) {
     prisms.push({
       key: `jring:${j.key}`,
-      polygon: applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]),
+      polygon: finalPoly(`jring:${j.key}`, j.polygon),
       base: 0,
       height: ROAD_H,
       color: '#525e6a',
     });
     j.coverBands.forEach((b, i) =>
-      prisms.push({ key: `jcover:${j.key}:${i}`, polygon: b, base: 0, height: ROAD_H, color: '#525e6a' }),
+      prisms.push({
+        key: `jcover:${j.key}:${i}`,
+        polygon: meshView?.polygon(`jcover:${j.key}:${i}`) ?? b,
+        base: 0,
+        height: ROAD_H,
+        color: '#525e6a',
+      }),
     );
     for (const b of [...j.wedges, ...j.noses]) {
       prisms.push({
         key: `jband:${j.key}:${b.key}`,
-        polygon: applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`]),
+        polygon: finalPoly(`jband:${j.key}:${b.key}`, b.polygon),
         base: 0,
         height: KIND_HEIGHT[b.kind],
         color: KIND_COLORS[b.kind],
@@ -120,7 +136,7 @@ export function buildScene(
     for (const b of t.bands) {
       prisms.push({
         key: `t:${t.nodeId}:${b.key}`,
-        polygon: b.polygon,
+        polygon: meshView?.polygon(`tband:${t.nodeId}:${b.key}`) ?? b.polygon,
         base: 0,
         height: KIND_HEIGHT[b.kind],
         color: KIND_COLORS[b.kind],

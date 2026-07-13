@@ -9,6 +9,8 @@ import { deriveNodeArtifactsCached } from '../graph/junctions';
 import { buildEdgeGeometry } from '../sections/transition';
 import { elementFrame } from '../detailing/elements';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
+import { deriveMeshView, hasMeshEdits } from '../mesh/meshGeometry';
+import type { MeshEdits } from '../mesh/mesh';
 import type { VertexOverrides } from '../cad/vertexOverrides';
 
 type Feature = {
@@ -43,8 +45,16 @@ export function buildGeoJson(
   boundaries: Boundary[],
   vertexOverrides: VertexOverrides = {},
   blend = true,
+  meshEdits: MeshEdits = {},
 ): string {
   const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
+  // Exported surfaces must match the screen: mesh-edited welded geometry wins
+  // (mesh polygons already carry vertexOverrides).
+  const meshView = hasMeshEdits(meshEdits)
+    ? deriveMeshView(g, designs, blend, vertexOverrides, meshEdits)
+    : null;
+  const finalPoly = (key: string, base: number[]) =>
+    meshView?.polygon(key) ?? applyShapeOverrides(base, vertexOverrides[key]);
   const features: Feature[] = [];
 
   for (const e of Object.values(g.edges)) {
@@ -68,7 +78,7 @@ export function buildGeoJson(
         type: 'Feature',
         geometry: {
           type: 'Polygon',
-          coordinates: polygonCoords(origin, applyShapeOverrides(b.polygon, vertexOverrides[`band:${e.id}:${b.key}`])),
+          coordinates: polygonCoords(origin, finalPoly(`band:${e.id}:${b.key}`, b.polygon)),
         },
         properties: { layer: 'band', edgeId: e.id, kind: b.kind, key: b.key },
       });
@@ -80,7 +90,7 @@ export function buildGeoJson(
       type: 'Feature',
       geometry: {
         type: 'Polygon',
-        coordinates: polygonCoords(origin, applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`])),
+        coordinates: polygonCoords(origin, finalPoly(`jring:${j.key}`, j.polygon)),
       },
       properties: { layer: 'junction', key: j.key, degree: j.degree, names: j.names.join(' × ') },
     });
@@ -89,7 +99,7 @@ export function buildGeoJson(
         type: 'Feature',
         geometry: {
           type: 'Polygon',
-          coordinates: polygonCoords(origin, applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`])),
+          coordinates: polygonCoords(origin, finalPoly(`jband:${j.key}:${b.key}`, b.polygon)),
         },
         properties: { layer: 'junction-band', key: j.key, kind: b.kind },
       });
@@ -99,7 +109,10 @@ export function buildGeoJson(
     for (const b of t.bands) {
       features.push({
         type: 'Feature',
-        geometry: { type: 'Polygon', coordinates: polygonCoords(origin, b.polygon) },
+        geometry: {
+          type: 'Polygon',
+          coordinates: polygonCoords(origin, meshView?.polygon(`tband:${t.nodeId}:${b.key}`) ?? b.polygon),
+        },
         properties: { layer: 'transition', nodeId: t.nodeId, kind: b.kind },
       });
     }

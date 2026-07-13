@@ -19,8 +19,9 @@ const PATCH_KINDS: PatchKind[] = [
 export function EditPanel() {
   const patches = useCst((s) => s.patches);
   const vertexOverrides = useCst((s) => s.vertexOverrides);
-  const selectedShapeKey = useCst((s) => s.selectedShapeKey);
-  const selectShape = useCst((s) => s.selectShape);
+  const meshEdits = useCst((s) => s.meshEdits);
+  const removeMeshDelta = useCst((s) => s.removeMeshDelta);
+  const clearMeshEdits = useCst((s) => s.clearMeshEdits);
   const clearShapeOverrides = useCst((s) => s.clearShapeOverrides);
   const patchKind = useCst((s) => s.patchKind);
   const setPatchKind = useCst((s) => s.setPatchKind);
@@ -50,33 +51,47 @@ export function EditPanel() {
         right-click a vertex removes it, right-click a patch deletes it.
       </p>
 
-      <h3>Node editing</h3>
+      <h3>Mesh node editing</h3>
       <p className="muted small">
-        Click any <strong>generated</strong> surface (band, junction, wedge) to
-        outline it, then drag its nodes. Nudges are stored parametrically — they
-        ride along when the street moves or resizes, and drop out if their shape
-        disappears. Right-click a node resets it.
+        The whole street is one <strong>shared-node mesh</strong>: every point
+        where surfaces meet exists exactly once. Drag any node and the
+        footpath, cycle track, carriageway, junction and corner it touches all
+        reshape together — hovering a node outlines everything it drives.
+        Edits are stored by stable node key, so they ride along when the
+        street regenerates and drop out if their geometry disappears.
+        Right-click a node resets it.
       </p>
-      {selectedShapeKey && (
-        <p className="small">
-          Editing <strong>{selectedShapeKey}</strong>{' '}
-          <button className="mini" onClick={() => selectShape(null)}>
-            done
-          </button>
-        </p>
+      {Object.keys(meshEdits).length > 0 && (
+        <>
+          <h3 className="row-between">
+            Mesh edits ({Object.keys(meshEdits).length})
+            <button className="mini" title="reset all mesh edits" onClick={clearMeshEdits}>
+              reset all
+            </button>
+          </h3>
+          <ul className="edge-list">
+            {Object.entries(meshEdits).map(([key, d]) => (
+              <li key={key} className="row-between small">
+                <span className="mono">
+                  {key} · {Math.hypot(d.dx, d.dy).toFixed(2)} m
+                </span>
+                <button className="mini" title="reset this node" onClick={() => removeMeshDelta(key)}>
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
       {Object.keys(vertexOverrides).length > 0 && (
         <>
-          <h3>Edited shapes ({Object.keys(vertexOverrides).length})</h3>
+          <h3>Legacy shape nudges ({Object.keys(vertexOverrides).length})</h3>
           <ul className="edge-list">
             {Object.entries(vertexOverrides).map(([key, ov]) => (
               <li key={key} className="row-between small">
-                <button
-                  className={key === selectedShapeKey ? 'active' : ''}
-                  onClick={() => selectShape(key)}
-                >
+                <span className="mono">
                   {key} · {Object.keys(ov).length} node(s)
-                </button>
+                </span>
                 <button className="mini" title="reset to generated geometry" onClick={() => clearShapeOverrides(key)}>
                   ×
                 </button>

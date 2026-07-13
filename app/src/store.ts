@@ -43,6 +43,7 @@ import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
 import { clearAutosave, fromDocument, readAutosave, writeAutosave } from './persistence';
 import type { VertexDelta, VertexOverrides } from './cad/vertexOverrides';
+import type { MeshEdits } from './mesh/mesh';
 
 // One shared store across all stages; stage is a UI mode, not a data boundary
 // (Plan v2 §1.1). The graph core (nodes/edges) is the undoable slice.
@@ -122,6 +123,10 @@ interface CstState extends GraphState {
   /** CAD keyed-vertex overrides on generated geometry (undoable, persisted).
    *  shapeKey → fraction-key → (along, across) nudge (CAD_Architecture §1–4). */
   vertexOverrides: VertexOverrides;
+  /** Shared-node mesh edits (undoable, persisted): world-space displacements
+   *  keyed by stable mesh node key. One drag of a welded node reshapes every
+   *  abutting generated shape at once (MESH_INTEGRATION_SPEC §2/§4). */
+  meshEdits: MeshEdits;
   /** Generated shape whose vertices are being edited (Edit stage, transient). */
   selectedShapeKey: string | null;
   /** Stage 3.5 edit: free-form patches (undoable) + drawing state (not). */
@@ -233,6 +238,9 @@ interface CstState extends GraphState {
   setVertexDelta: (shapeKey: string, key: string, delta: VertexDelta) => void;
   removeVertexDelta: (shapeKey: string, key: string) => void;
   clearShapeOverrides: (shapeKey: string) => void;
+  setMeshDelta: (nodeKey: string, dx: number, dy: number) => void;
+  removeMeshDelta: (nodeKey: string) => void;
+  clearMeshEdits: () => void;
   /** Replace the whole design with a saved/restored document (undo history resets). */
   loadDocument: (raw: unknown, label?: string) => void;
   /** Start over: empty graph, empty overlays, autosave cleared. */
@@ -309,6 +317,7 @@ export const useCst = create<CstState>()(
       boundaryDraft: [],
       selectedBoundaryId: null,
       vertexOverrides: {},
+      meshEdits: {},
       selectedShapeKey: null,
       patches: {},
       nextPatchNum: 1,
@@ -1205,6 +1214,24 @@ export const useCst = create<CstState>()(
           return { vertexOverrides, statusMsg: 'shape reset to generated geometry' };
         }),
 
+      setMeshDelta: (nodeKey, dx, dy) =>
+        set((s) => ({ meshEdits: { ...s.meshEdits, [nodeKey]: { dx, dy } } })),
+
+      removeMeshDelta: (nodeKey) =>
+        set((s) => {
+          if (!(nodeKey in s.meshEdits)) return {};
+          const meshEdits = { ...s.meshEdits };
+          delete meshEdits[nodeKey];
+          return { meshEdits, statusMsg: 'mesh node reset' };
+        }),
+
+      clearMeshEdits: () =>
+        set((s) =>
+          Object.keys(s.meshEdits).length === 0
+            ? {}
+            : { meshEdits: {}, statusMsg: 'mesh edits reset to generated geometry' },
+        ),
+
       loadDocument: (raw, label = 'design') => {
         const slice = fromDocument(raw);
         if (typeof slice === 'string') {
@@ -1256,6 +1283,7 @@ export const useCst = create<CstState>()(
           boundaryDraft: [],
           selectedBoundaryId: null,
           vertexOverrides: {},
+          meshEdits: {},
           selectedShapeKey: null,
           busStops: [],
           selectedEdgeId: null,
@@ -1296,6 +1324,7 @@ export const useCst = create<CstState>()(
         boundaries: s.boundaries,
         nextBoundaryNum: s.nextBoundaryNum,
         vertexOverrides: s.vertexOverrides,
+        meshEdits: s.meshEdits,
       }),
       equality: (a, b) =>
         a.nodes === b.nodes &&
@@ -1304,7 +1333,8 @@ export const useCst = create<CstState>()(
         a.elements === b.elements &&
         a.patches === b.patches &&
         a.boundaries === b.boundaries &&
-        a.vertexOverrides === b.vertexOverrides,
+        a.vertexOverrides === b.vertexOverrides &&
+        a.meshEdits === b.meshEdits,
       limit: 100,
     },
   ),
@@ -1338,6 +1368,7 @@ if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       s.patches === prev.patches &&
       s.boundaries === prev.boundaries &&
       s.vertexOverrides === prev.vertexOverrides &&
+      s.meshEdits === prev.meshEdits &&
       s.busStops === prev.busStops
     ) {
       return;
