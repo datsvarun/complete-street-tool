@@ -65,8 +65,9 @@ export function buildScene(
   elements: StreetElement[],
   patches: Patch[] = [],
   vertexOverrides: VertexOverrides = {},
+  blend = true,
 ): SceneSpec {
-  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs);
+  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
   const prisms: ScenePrism[] = [];
   const posts: ScenePost[] = [];
 

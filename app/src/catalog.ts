@@ -4,17 +4,20 @@ import type { ComponentKind, CrossSection } from './types';
 // Catalog element names are inconsistent ("Mixed trraffic lane", "Bus Stop / MFZ", ...);
 // classify by keyword so every variant gets a stable kind for colouring/legend.
 // Check order matters: composite names ("Footpath with Bus Stop/MFZ") resolve to their host component.
+// Kind merges (user decision): MFZ and Bus Stop/MFZ fold into MUZ — one
+// multi-utility zone concept. 'mfz'/'busstop' stay in ComponentKind so old
+// saved documents still render, but the catalog no longer emits them.
 export function classifyElement(element: string): ComponentKind {
   const e = element.toLowerCase();
   if (e.includes('footpath')) return 'footpath';
   if (e.includes('cycle')) return 'cycle';
   if (e.includes('bus rapid')) return 'brt';
-  if (e.includes('bus stop')) return 'busstop';
+  if (e.includes('bus stop')) return 'muz';
   if (e.includes('carriageway')) return 'carriageway';
   if (e.startsWith('mixed')) return 'mixed';
   if (e.includes('service')) return 'service';
   if (e.includes('parking')) return 'parking';
-  if (e.includes('mfz')) return 'mfz';
+  if (e.includes('mfz')) return 'muz';
   if (e.includes('muz')) return 'muz';
   if (e.includes('median') || e.includes('verge')) return 'median';
   if (e.includes('tree')) return 'tree';
@@ -22,6 +25,16 @@ export function classifyElement(element: string): ComponentKind {
   if (e.includes('livability')) return 'livability';
   if (e.includes('metro')) return 'metro';
   return 'other';
+}
+
+/** Display-name normalization applied to every catalog element ("wherever
+ *  seen"): MFZ variants → MUZ, Tree Line → Green Buffer, mixed lane → Bus lane. */
+export function normalizeElementName(element: string): string {
+  const e = element.toLowerCase();
+  if (e.includes('bus stop') || e.includes('mfz')) return 'MUZ';
+  if (e.includes('tree')) return 'Green Buffer';
+  if (e.startsWith('mixed')) return 'Bus lane';
+  return element;
 }
 
 /** Components flush with the carriageway (parking is at-grade in Indian
@@ -52,35 +65,77 @@ export const KIND_COLORS: Record<ComponentKind, string> = {
 
 export const KIND_LABELS: Record<ComponentKind, string> = {
   carriageway: 'Carriageway',
-  mixed: 'Mixed traffic lane',
+  mixed: 'Bus lane',
   service: 'Service lane',
   brt: 'BRT corridor',
-  busstop: 'Bus stop',
+  busstop: 'MUZ', // merged (legacy documents only)
   parking: 'Parking',
   cycle: 'Cycle track',
   footpath: 'Footpath',
   muz: 'MUZ',
-  mfz: 'MFZ',
+  mfz: 'MUZ', // merged (legacy documents only)
   buffer: 'Buffer',
-  tree: 'Tree line',
+  tree: 'Green buffer',
   livability: 'Livability island',
   median: 'Median / verge',
   metro: 'Metro provision',
   other: 'Other',
 };
 
+const r2 = (v: number) => Math.round(v * 20) / 20; // 5 cm steps
+
+/** "Standard road" per ROW: rule of thirds — one third to sidewalks, a 0.6 m
+ *  median on 12 m+, the rest carriageway. Very small ROWs get a single-side
+ *  footpath instead. */
+function standardSection(rowM: number): CrossSection {
+  const components: CrossSection['components'] = [];
+  const fp = (w: number) => ({ element: 'Footpath', widthM: r2(w), kind: 'footpath' as ComponentKind });
+  const cw = (w: number) => ({ element: 'Carriageway', widthM: r2(w), kind: 'carriageway' as ComponentKind });
+  if (rowM < 9) {
+    // small section: footpath one side only
+    const walk = Math.max(1.8, r2(rowM / 3));
+    components.push(fp(walk), cw(rowM - walk));
+  } else if (rowM < 12) {
+    const walk = r2(rowM / 3 / 2);
+    components.push(fp(walk), cw(rowM - walk * 2), fp(walk));
+  } else {
+    const walk = r2(rowM / 3 / 2);
+    const median = 0.6;
+    const half = r2((rowM - walk * 2 - median) / 2);
+    components.push(fp(walk), cw(half), {
+      element: 'Median',
+      widthM: median,
+      kind: 'median',
+    }, cw(half), fp(walk));
+  }
+  return {
+    id: `std${rowM}`,
+    name: `${rowM}m Standard road`,
+    label: `${rowM}m Standard`,
+    source: 'std',
+    category: 'standard',
+    rowWidthM: rowM,
+    totalWidthM: components.reduce((s, c) => s + c.widthM, 0),
+    components,
+  };
+}
+
 function buildCatalog(): CrossSection[] {
   const sections: CrossSection[] = [];
+  const rows = new Set<number>();
   for (const group of rawCatalog.row_width_groups) {
+    rows.add(group.row_width_m);
     group.street_configurations.forEach((config, i) => {
       const components = config.components.map((c) => ({
-        element: c.element,
+        element: normalizeElementName(c.element),
         widthM: c.width_m,
         kind: classifyElement(c.element),
       }));
       sections.push({
         id: `row${group.row_width_m}-${i}`,
         name: config.street_type_name,
+        label: `${group.row_width_m}m IRC (${i + 1})`,
+        source: 'irc',
         category: config.street_category,
         rowWidthM: group.row_width_m,
         totalWidthM: components.reduce((s, c) => s + c.widthM, 0),
@@ -88,6 +143,8 @@ function buildCatalog(): CrossSection[] {
       });
     });
   }
+  // one Standard road per ROW, listed first in each group
+  for (const rowM of rows) sections.push(standardSection(rowM));
   return sections;
 }
 
@@ -102,7 +159,11 @@ export const CATALOG_BY_ROW: Array<{ rowWidthM: number; sections: CrossSection[]
   }
   return [...rows.entries()]
     .sort(([a], [b]) => a - b)
-    .map(([rowWidthM, sections]) => ({ rowWidthM, sections }));
+    .map(([rowWidthM, sections]) => ({
+      rowWidthM,
+      // Standard road first, then IRC configs in catalog order
+      sections: [...sections].sort((a, b) => (a.source === 'std' ? -1 : b.source === 'std' ? 1 : 0)),
+    }));
 })();
 
 export function getSection(id: string | null): CrossSection | null {

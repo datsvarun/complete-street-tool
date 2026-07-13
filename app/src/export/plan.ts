@@ -5,7 +5,7 @@ import type { Boundary, GraphState, JunctionDesign, Patch, StreetElement } from 
 import { KIND_COLORS } from '../catalog';
 import { buildEdgeGeometry } from '../sections/transition';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
-import { elementGraphics, laneDividers } from '../detailing/elements';
+import { bandDecals, elementGraphics, laneDividers } from '../detailing/elements';
 import { graphBounds } from '../graph/ops';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
 import type { VertexOverrides } from '../cad/vertexOverrides';
@@ -36,8 +36,9 @@ export function planContent(
   patches: Patch[] = [],
   boundaries: Boundary[] = [],
   vertexOverrides: VertexOverrides = {},
+  blend = true,
 ): string {
-  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs);
+  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
   const out: string[] = [];
 
   // 1. carriageway surface + wedges + noses (junctions under ribbons)
@@ -77,9 +78,10 @@ export function planContent(
     for (const b of t.bands) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
   }
 
-  // 4. lane dividers
+  // 4. lane dividers + parametric decals (parking ticks, cycle chevrons)
   for (const e of Object.values(g.edges)) {
     for (const d of laneDividers(e, trims[e.id])) out.push(pline(d, '#f2f0e9', 0.16, [0.6, 0.9]));
+    for (const d of bandDecals(e, trims[e.id])) out.push(pline(d.pts!, d.stroke ?? '#f2f0e9', d.strokeWidth ?? 0.15));
   }
 
   // 5. detailing elements

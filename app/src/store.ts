@@ -18,7 +18,7 @@ import type {
   StreetElement,
   Tool,
 } from './types';
-import { DEFAULT_WIDTH, pruneElements, resolveDrop, suggestBusStops, suggestElements, suggestZebras } from './detailing/elements';
+import { DEFAULT_WIDTH, pruneElements, resolveDrop, suggestBusStops, suggestElements, suggestTurnArrows, suggestZebras } from './detailing/elements';
 import { projectOnPolyline } from './geometry/polyline';
 import { deriveNodeArtifactsCached } from './graph/junctions';
 import {
@@ -50,6 +50,50 @@ import type { VertexDelta, VertexOverrides } from './cad/vertexOverrides';
 export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
 
 export type Basemap = 'none' | 'osm' | 'sat';
+
+/** App preferences — device-level, never part of the design document. */
+export interface AppSettings {
+  theme: 'day' | 'night';
+  /** Traffic handedness: drives turn-arrow suggestions (India = LHT). */
+  drive: 'lht' | 'rht';
+  /** Blend unmatched components around junction corners (wedges). Off =
+   *  non-matching bands simply end at the junction (user default). */
+  junctionBlend: boolean;
+  /** Hide sub-pixel detail when zoomed out (perf LOD). */
+  lod: boolean;
+}
+
+export type LayerKey = 'roads' | 'junctions' | 'furniture' | 'markings' | 'patches' | 'boundaries';
+
+export const LAYER_LABELS: Record<LayerKey, string> = {
+  roads: 'Road sections',
+  junctions: 'Junctions',
+  furniture: 'Street furniture',
+  markings: 'Markings & decals',
+  patches: 'Edit patches',
+  boundaries: 'Plot boundaries',
+};
+
+const DEFAULT_LAYERS: Record<LayerKey, boolean> = {
+  roads: true,
+  junctions: true,
+  furniture: true,
+  markings: true,
+  patches: true,
+  boundaries: true,
+};
+
+const DEFAULT_SETTINGS: AppSettings = { theme: 'day', drive: 'lht', junctionBlend: false, lod: true };
+const SETTINGS_KEY = 'cst.settings.v1';
+
+function readSettings(): AppSettings {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(SETTINGS_KEY) : null;
+    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : { ...DEFAULT_SETTINGS };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
 
 interface CstState extends GraphState {
   stage: Stage;
@@ -102,10 +146,15 @@ interface CstState extends GraphState {
   statusMsg: string;
   importBusy: boolean;
   reviewList: ReviewItem[];
+  settings: AppSettings;
+  /** Layer visibility (UI state): hiding a layer never touches the data. */
+  layers: Record<LayerKey, boolean>;
 
   setStage: (stage: Stage) => void;
   setTool: (tool: Tool) => void;
   addDraftVert: (v: DraftVert) => void;
+  /** Backspace while drawing: drop the last vertex, keep drawing. */
+  popDraftVert: () => void;
   finishDraft: (tolWorld: number) => void;
   cancelDraft: () => void;
   selectEdge: (id: string | null, mode?: boolean | SelectMode) => void;
@@ -149,7 +198,8 @@ interface CstState extends GraphState {
   moveElement: (id: string, wx: number, wy: number, tolM: number) => void;
   removeElement: (id: string) => void;
   selectElement: (id: string | null) => void;
-  suggest: (kind: ElementKind) => void;
+  suggest: (kind: ElementKind, spacingM?: number) => void;
+  setElementProp: (id: string, key: string, value: string | number | boolean) => void;
   clearSuggestions: () => void;
   setEdgeLanes: (edgeId: string, lanes: number) => void;
   /** Auto lane counts from carriageway width (3.25 m lanes) → dashed dividers. */
@@ -187,6 +237,8 @@ interface CstState extends GraphState {
   loadDocument: (raw: unknown, label?: string) => void;
   /** Start over: empty graph, empty overlays, autosave cleared. */
   clearAll: () => void;
+  setSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  toggleLayer: (key: LayerKey) => void;
 }
 
 const EMPTY_DESIGN: JunctionDesign = {
@@ -276,6 +328,8 @@ export const useCst = create<CstState>()(
       statusMsg: '',
       importBusy: false,
       reviewList: [],
+      settings: readSettings(),
+      layers: { ...DEFAULT_LAYERS },
 
       setStage: (stage) => {
         // Leaving any stage drops all transient drawing/placement modes so
@@ -319,6 +373,8 @@ export const useCst = create<CstState>()(
         })),
 
       addDraftVert: (v) => set((s) => ({ draft: [...s.draft, v] })),
+
+      popDraftVert: () => set((s) => ({ draft: s.draft.slice(0, -1) })),
 
       finishDraft: (tolWorld) => {
         const s = get();
@@ -809,16 +865,27 @@ export const useCst = create<CstState>()(
 
       selectElement: (id) => set({ selectedElementId: id }),
 
-      suggest: (kind) =>
+      setElementProp: (id, key, value) =>
         set((s) => {
-          const { trims } = deriveNodeArtifactsCached(pickGraph(s), s.junctionDesigns);
+          const el = s.elements[id];
+          if (!el) return {};
+          return {
+            elements: { ...s.elements, [id]: { ...el, props: { ...el.props, [key]: value } } },
+          };
+        }),
+
+      suggest: (kind, spacingM) =>
+        set((s) => {
+          const { trims } = deriveNodeArtifactsCached(pickGraph(s), s.junctionDesigns, s.settings.junctionBlend);
           const existing = Object.values(s.elements);
           const created =
             kind === 'zebra'
               ? suggestZebras(pickGraph(s), existing, trims)
               : kind === 'busstop'
                 ? suggestBusStops(pickGraph(s), s.busStops, existing)
-                : suggestElements(pickGraph(s), kind, existing, trims);
+                : kind === 'turnarrow'
+                  ? suggestTurnArrows(pickGraph(s), existing, trims, s.settings.drive)
+                  : suggestElements(pickGraph(s), kind, existing, trims, spacingM);
           if (created.length === 0) {
             if (kind === 'busstop') {
               return {
@@ -1093,6 +1160,20 @@ export const useCst = create<CstState>()(
           delete junctionDesigns[jKey];
           return { junctionDesigns, statusMsg: 'junction overrides removed' };
         }),
+
+      setSetting: (key, value) =>
+        set((s) => {
+          const settings = { ...s.settings, [key]: value };
+          try {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+          } catch {
+            // storage unavailable — settings stay session-local
+          }
+          return { settings };
+        }),
+
+      toggleLayer: (key) =>
+        set((s) => ({ layers: { ...s.layers, [key]: !s.layers[key] } })),
 
       selectShape: (key) => set({ selectedShapeKey: key }),
 

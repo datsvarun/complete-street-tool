@@ -1,7 +1,7 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useCst } from '../store';
 import type { ElementKind } from '../types';
-import { ELEMENT_LABELS } from '../detailing/elements';
+import { ELEMENT_LABELS, ELEMENT_PROPS, propOf } from '../detailing/elements';
 
 // Palette groups mirror the user's brief: furniture / plantation, markings,
 // crossings & entrances. Turn arrows carry a direction variant.
@@ -35,7 +35,7 @@ const GROUPS: Array<{ title: string; items: Array<{ kind: ElementKind; variant?:
   },
 ];
 
-const SUGGESTABLE: ElementKind[] = ['tree', 'streetlight', 'dustbin', 'zebra', 'busstop'];
+const SUGGESTABLE: ElementKind[] = ['tree', 'streetlight', 'dustbin', 'zebra', 'busstop', 'turnarrow'];
 
 export function DetailingPanel() {
   const placeKind = useCst((s) => s.placeKind);
@@ -49,6 +49,9 @@ export function DetailingPanel() {
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const selectEdge = useCst((s) => s.selectEdge);
   const setEdgeLanes = useCst((s) => s.setEdgeLanes);
+  const selectedElementId = useCst((s) => s.selectedElementId);
+  const setElementProp = useCst((s) => s.setElementProp);
+  const [spacingText, setSpacingText] = useState('');
 
   const anySection = Object.values(edges).some((e) => e.section);
   const counts = useMemo(() => {
@@ -96,14 +99,78 @@ export function DetailingPanel() {
         </div>
       ))}
 
+      {(() => {
+        const selEl = selectedElementId ? elements[selectedElementId] : null;
+        const fields = selEl ? ELEMENT_PROPS[selEl.kind] ?? [] : [];
+        if (!selEl) return null;
+        return (
+          <>
+            <h3>Object properties</h3>
+            <p className="muted small">
+              <strong>#{selEl.id}</strong> · {ELEMENT_LABELS[selEl.kind]}
+              {selEl.variant ? ` (${selEl.variant})` : ''} · {selEl.edgeId} @{' '}
+              {selEl.stationM.toFixed(1)} m{selEl.placedBy === 'suggest' ? ' · suggested' : ''}
+            </p>
+            {fields.length === 0 && <p className="muted small">No editable properties for this type.</p>}
+            {fields.map((f) => (
+              <label key={f.key} className="prop-row small">
+                <span>{f.label}</span>
+                {f.type === 'select' ? (
+                  <select
+                    value={propOf(selEl, f.key, f.default as string)}
+                    onChange={(e) => setElementProp(selEl.id, f.key, e.target.value)}
+                  >
+                    {f.options!.map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                ) : f.type === 'number' ? (
+                  <input
+                    type="number"
+                    step={0.1}
+                    min={f.min}
+                    max={f.max}
+                    value={propOf(selEl, f.key, f.default as number)}
+                    onChange={(e) => {
+                      const v = parseFloat(e.target.value);
+                      if (Number.isFinite(v)) setElementProp(selEl.id, f.key, v);
+                    }}
+                  />
+                ) : (
+                  <input
+                    type="checkbox"
+                    checked={propOf(selEl, f.key, f.default as boolean)}
+                    onChange={(e) => setElementProp(selEl.id, f.key, e.target.checked)}
+                  />
+                )}
+              </label>
+            ))}
+          </>
+        );
+      })()}
+
       <h3>Auto-suggest</h3>
       <p className="muted small">
         Crossings go at junction approaches; bus stops come from the OSM
-        download; lane lines derive from carriageway width.
+        download; turn arrows follow lane discipline (handedness in Settings);
+        lane lines derive from carriageway width.
       </p>
+      <label className="prop-row small">
+        <span>c/c spacing (m)</span>
+        <input
+          type="number"
+          placeholder="default"
+          min={1}
+          value={spacingText}
+          onChange={(e) => setSpacingText(e.target.value)}
+          title="Centre-to-centre distance for tree/light/bin suggestions — blank uses each type's default"
+        />
+      </label>
       <div className="palette">
         {SUGGESTABLE.map((k) => (
-          <button key={k} className="chip" onClick={() => suggest(k)}>
+          <button key={k} className="chip" onClick={() => suggest(k, parseFloat(spacingText) || undefined)}>
             + {ELEMENT_LABELS[k]}s
           </button>
         ))}

@@ -33,6 +33,7 @@ export function StripEditor() {
   const [selIdx, setSelIdx] = useState<number | null>(null);
   const [widthText, setWidthText] = useState('');
   const [addKind, setAddKind] = useState(COMPONENT_DEFAULTS[0].element);
+  const [refEdit, setRefEdit] = useState<string | null>(null); // manual centerline entry
 
   useEffect(() => {
     setSelIdx(null);
@@ -140,6 +141,22 @@ export function StripEditor() {
     setSelIdx(at);
   };
 
+  // In-place swap: change the selected component's type, keeping its width.
+  const swapKind = (element: string) => {
+    if (selIdx === null) return;
+    const def = COMPONENT_DEFAULTS.find((d) => d.element === element);
+    if (!def) return;
+    update(comps.map((c, i) => (i === selIdx ? { ...c, element: def.element, kind: def.kind } : c)));
+  };
+
+  const commitRef = () => {
+    if (refEdit !== null) {
+      const v = parseFloat(refEdit);
+      if (Number.isFinite(v)) updateSectionRef(edge.id, v);
+    }
+    setRefEdit(null);
+  };
+
   return (
     <div className="strip-editor">
       <div className="strip-head">
@@ -158,6 +175,20 @@ export function StripEditor() {
           </button>
           {sel && (
             <>
+              <select
+                value={COMPONENT_DEFAULTS.find((d) => d.kind === sel.kind)?.element ?? ''}
+                onChange={(e) => swapKind(e.target.value)}
+                title="Change this component's type in place (width stays)"
+              >
+                {!COMPONENT_DEFAULTS.some((d) => d.kind === sel.kind) && (
+                  <option value="">{sel.element}</option>
+                )}
+                {COMPONENT_DEFAULTS.map((d) => (
+                  <option key={d.element} value={d.element}>
+                    {d.element}
+                  </option>
+                ))}
+              </select>
               <button onClick={() => nudge(-RES_CLICK)}>−0.1</button>
               <input
                 className="w-input"
@@ -182,10 +213,38 @@ export function StripEditor() {
           <button onClick={add}>Add</button>
         </span>
       </div>
-      <div className="ref-track" onPointerDown={dragRef} title="Drag: where the drawn centerline sits (snaps to component edges, centers, and the middle)">
+      <div
+        className="ref-track"
+        onPointerDown={refEdit === null ? dragRef : undefined}
+        title="Drag: where the drawn centerline sits (snaps to component edges, centers, and the middle) · click the number to type it"
+      >
         <div className="ref-marker" style={{ left: `${(refM / Math.max(total, 0.01)) * 100}%` }}>
           <span className="ref-arrow">▲</span>
-          <span className="ref-label">{refM.toFixed(2)} m</span>
+          {refEdit === null ? (
+            <span
+              className="ref-label editable"
+              title="Click to type an exact centerline position"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                setRefEdit(refM.toFixed(2));
+              }}
+            >
+              {refM.toFixed(2)} m
+            </span>
+          ) : (
+            <input
+              className="ref-input"
+              autoFocus
+              value={refEdit}
+              onChange={(e) => setRefEdit(e.target.value)}
+              onBlur={commitRef}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRef();
+                if (e.key === 'Escape') setRefEdit(null);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            />
+          )}
         </div>
       </div>
       <div className="strip-row">

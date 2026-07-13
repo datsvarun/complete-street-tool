@@ -44,6 +44,56 @@ const SHORTCUTS: Array<[string, string]> = [
   ['?', 'This help'],
 ];
 
+function SettingsOverlay({ onClose }: { onClose: () => void }) {
+  const settings = useCst((s) => s.settings);
+  const setSetting = useCst((s) => s.setSetting);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>Settings</h2>
+        <div className="settings-grid">
+          <label>Theme</label>
+          <div className="tool-row">
+            <button className={settings.theme === 'day' ? 'active' : ''} onClick={() => setSetting('theme', 'day')}>
+              ☀ Day
+            </button>
+            <button className={settings.theme === 'night' ? 'active' : ''} onClick={() => setSetting('theme', 'night')}>
+              ☾ Night
+            </button>
+          </div>
+          <label>Traffic</label>
+          <div className="tool-row">
+            <button className={settings.drive === 'lht' ? 'active' : ''} onClick={() => setSetting('drive', 'lht')}>
+              Left-hand drive
+            </button>
+            <button className={settings.drive === 'rht' ? 'active' : ''} onClick={() => setSetting('drive', 'rht')}>
+              Right-hand drive
+            </button>
+          </div>
+          <label>Junctions</label>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={settings.junctionBlend}
+              onChange={(e) => setSetting('junctionBlend', e.target.checked)}
+            />
+            Blend unmatched footpaths/verges around corners (wedges). Off: bands
+            simply end at the junction. Mid-street split transitions are always on.
+          </label>
+          <label>Performance</label>
+          <label className="check">
+            <input type="checkbox" checked={settings.lod} onChange={(e) => setSetting('lod', e.target.checked)} />
+            Hide sub-pixel detail (markings, furniture) when zoomed out
+          </label>
+        </div>
+        <button className="mini" onClick={onClose}>
+          Close (Esc)
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function HelpOverlay({ onClose }: { onClose: () => void }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -105,10 +155,16 @@ export default function App() {
   const setDesignOpacity = useCst((s) => s.setDesignOpacity);
   const [panelOpen, setPanelOpen] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [view3d, setView3d] = useState(false);
-  const overlayRef = useRef({ helpOpen: false, view3d: false });
-  overlayRef.current = { helpOpen, view3d };
+  const overlayRef = useRef({ open: false });
+  overlayRef.current = { open: helpOpen || view3d || settingsOpen };
   const fileRef = useRef<HTMLInputElement>(null);
+  const theme = useCst((s) => s.settings.theme);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   const openFile = async (file: File) => {
     try {
@@ -124,10 +180,11 @@ export default function App() {
       const s = useCst.getState();
       const k = e.key.toLowerCase();
       // Overlays swallow keys: Esc closes, ? toggles help, rest pass nothing.
-      if (overlayRef.current.helpOpen || overlayRef.current.view3d) {
+      if (overlayRef.current.open) {
         if (e.key === 'Escape' || e.key === '?') {
           setHelpOpen(false);
           setView3d(false);
+          setSettingsOpen(false);
         }
         return;
       }
@@ -164,6 +221,11 @@ export default function App() {
         s.finishDraft(0.5);
       } else if (e.key === 'Enter' && s.patchDraft.length >= 6) {
         s.finishPatch();
+      } else if (e.key === 'Backspace' && s.draft.length > 0) {
+        // step back one vertex without cancelling the drawing
+        s.popDraftVert();
+      } else if (e.key === 'Backspace' && s.boundaryDraft.length > 0) {
+        useCst.setState({ boundaryDraft: s.boundaryDraft.slice(0, -2) });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (s.selectedPatchId) s.removePatch(s.selectedPatchId);
         else if (s.selectedElementId) s.removeElement(s.selectedElementId);
@@ -174,8 +236,10 @@ export default function App() {
           s.setStage(STAGE_KEYS[k]);
           setPanelOpen(true);
         } else if (TOOL_KEYS[k]) {
-          // direct/draw/split/erase are network-only (nodes & vertices live there)
-          if (['direct', 'draw', 'split', 'erase'].includes(TOOL_KEYS[k]) && s.stage !== 'network') return;
+          // direct is network-only (nodes & vertices render there); draw/split/
+          // erase also work in the street stage (mid-street section changes)
+          if (TOOL_KEYS[k] === 'direct' && s.stage !== 'network') return;
+          if (['draw', 'split', 'erase'].includes(TOOL_KEYS[k]) && !['network', 'sections'].includes(s.stage)) return;
           s.setTool(TOOL_KEYS[k]);
         } else if (k === 'f') {
           s.fitAll();
@@ -243,6 +307,9 @@ export default function App() {
           <button onClick={() => setView3d(true)} title="Preview the design in 3D">
             3D
           </button>
+          <button onClick={() => setSettingsOpen(true)} title="Settings — theme, traffic side, junction blending">
+            ⚙
+          </button>
           <button onClick={() => setHelpOpen(true)} title="Keyboard shortcuts (?)">
             ?
           </button>
@@ -277,6 +344,7 @@ export default function App() {
       </main>
       <Toast />
       {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
+      {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
       {view3d && (
         <Suspense fallback={<div className="scene3d loading">Loading 3D…</div>}>
           <Scene3D onClose={() => setView3d(false)} />

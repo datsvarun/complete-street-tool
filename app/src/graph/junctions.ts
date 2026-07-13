@@ -415,6 +415,7 @@ function computeJunction(
   nodeIds: string[],
   edges: StreetEdge[],
   design?: JunctionDesign,
+  blend = true,
 ): ClusterResult | null {
   const inCluster = new Set(nodeIds);
   const approachesRaw: Array<{ edge: StreetEdge; node: string }> = [];
@@ -494,7 +495,9 @@ function computeJunction(
     // lie across the mouths. Leave the surface bare (probe method, slice J7).
     const angularGap =
       (((approaches[(i + 1) % k].angle - a.angle) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-    if ((stackA.length > 0 || stackB.length > 0) && angularGap > MIN_WEDGE_ANGLE) {
+    // Corner wedges blend unmatched raised stacks around the corner; with
+    // blending off (settings default) the bands simply end at the mouths.
+    if (blend && (stackA.length > 0 || stackB.length > 0) && angularGap > MIN_WEDGE_ANGLE) {
       // dedupe joints: duplicated points make zero-length segments whose
       // normals vanish and pinch the sampled bands into spikes
       let path = chaikinSmooth(toFlat(dedupePts(toPts([...segARev, ...corner.arc, ...(segB ?? [])]), 0.08)));
@@ -730,23 +733,26 @@ let lastDerive: {
   nodes: GraphState['nodes'];
   edges: GraphState['edges'];
   designs: Record<string, JunctionDesign> | undefined;
+  blend: boolean;
   result: NodeArtifacts;
 } | null = null;
 
 export function deriveNodeArtifactsCached(
   g: GraphState,
   designs?: Record<string, JunctionDesign>,
+  blend = true,
 ): NodeArtifacts {
   if (
     lastDerive &&
     lastDerive.nodes === g.nodes &&
     lastDerive.edges === g.edges &&
-    lastDerive.designs === designs
+    lastDerive.designs === designs &&
+    lastDerive.blend === blend
   ) {
     return lastDerive.result;
   }
-  const result = deriveNodeArtifacts(g, designs);
-  lastDerive = { nodes: g.nodes, edges: g.edges, designs, result };
+  const result = deriveNodeArtifacts(g, designs, blend);
+  lastDerive = { nodes: g.nodes, edges: g.edges, designs, blend, result };
   return result;
 }
 
@@ -754,6 +760,7 @@ export function deriveNodeArtifactsCached(
 export function deriveNodeArtifacts(
   g: GraphState,
   designs?: Record<string, JunctionDesign>,
+  blend = true,
 ): NodeArtifacts {
   const byNode = new Map<string, StreetEdge[]>();
   for (const e of Object.values(g.edges)) {
@@ -774,7 +781,7 @@ export function deriveNodeArtifacts(
   const singleTrim = new Map<string, number>();
   const singleRes = new Map<string, ClusterResult | null>();
   for (const nid of junctionNodes) {
-    const res = computeJunction(g, [nid], byNode.get(nid)!, designs?.[nid]);
+    const res = computeJunction(g, [nid], byNode.get(nid)!, designs?.[nid], blend);
     singleRes.set(nid, res);
     res?.trims.forEach((t) => singleTrim.set(`${t.edgeId}:${t.end}`, t.trim));
   }
@@ -814,7 +821,7 @@ export function deriveNodeArtifacts(
     } else {
       const edgeSet = new Map<string, StreetEdge>();
       for (const nid of nodeIds) for (const e of byNode.get(nid)!) edgeSet.set(e.id, e);
-      res = computeJunction(g, nodeIds, [...edgeSet.values()], designs?.[[...nodeIds].sort().join('+')]);
+      res = computeJunction(g, nodeIds, [...edgeSet.values()], designs?.[[...nodeIds].sort().join('+')], blend);
     }
     if (res) {
       junctions.push(res.poly);

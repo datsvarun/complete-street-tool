@@ -33,7 +33,9 @@ export interface SectionComponent {
 
 export interface CrossSection {
   id: string;
-  name: string;
+  name: string;         // full source name (IRC street_type_name / generated)
+  label: string;        // short display label, e.g. "15m IRC (1)" / "12m Standard"
+  source: 'irc' | 'std';
   category: string;
   rowWidthM: number;    // ROW group the catalog places this under
   totalWidthM: number;  // sum of component widths (may differ from ROW — catalog data quirks)
@@ -135,6 +137,9 @@ export interface StreetElement {
   variant?: string;    // turnarrow: 'left' | 'through' | 'right'
   widthM?: number;     // along-street width for zebra/raised/driveway
   placedBy?: 'user' | 'suggest';
+  /** Per-kind object properties (dustbin shape, lamp mount, tree canopy…).
+   *  Missing keys fall back to the kind's schema defaults. */
+  props?: Record<string, string | number | boolean>;
 }
 
 // ── Network: traced land-ownership / ROW boundaries ─────────────────────

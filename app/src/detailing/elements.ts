@@ -52,6 +52,54 @@ export const DEFAULT_WIDTH: Partial<Record<ElementKind, number>> = {
   driveway: 5,
 };
 
+// ── Object properties (user-editable, per kind) ─────────────────────────
+export interface PropField {
+  key: string;
+  label: string;
+  type: 'select' | 'number' | 'toggle';
+  options?: string[];
+  default: string | number | boolean;
+  min?: number;
+  max?: number;
+}
+
+export const ELEMENT_PROPS: Partial<Record<ElementKind, PropField[]>> = {
+  dustbin: [
+    { key: 'shape', label: 'Shape', type: 'select', options: ['round', 'square'], default: 'round' },
+    { key: 'diameterM', label: 'Diameter (m)', type: 'number', default: 0.7, min: 0.3, max: 2 },
+    { key: 'heightM', label: 'Height (m)', type: 'number', default: 1.0, min: 0.4, max: 2 },
+  ],
+  streetlight: [
+    {
+      key: 'mount',
+      label: 'Mount',
+      type: 'select',
+      // single = footpath pole · double = median, arms both ways · dual = road + footpath lamps
+      options: ['single', 'double', 'dual'],
+      default: 'single',
+    },
+    { key: 'heightM', label: 'Height (m)', type: 'number', default: 8, min: 3, max: 14 },
+  ],
+  tree: [
+    { key: 'species', label: 'Type', type: 'select', options: ['neem', 'peepal', 'gulmohar', 'ashoka', 'palm'], default: 'neem' },
+    { key: 'canopyM', label: 'Canopy (m)', type: 'number', default: 3.2, min: 1, max: 12 },
+    { key: 'heightM', label: 'Height (m)', type: 'number', default: 8, min: 2, max: 25 },
+    { key: 'trunkM', label: 'Trunk ⌀ (m)', type: 'number', default: 0.35, min: 0.1, max: 1.5 },
+    { key: 'grating', label: 'Footpath grating', type: 'toggle', default: true },
+  ],
+  busstop: [
+    { key: 'form', label: 'Form', type: 'select', options: ['shelter', 'stop'], default: 'shelter' },
+    { key: 'lengthM', label: 'Length (m)', type: 'number', default: 6, min: 2, max: 18 },
+    { key: 'depthM', label: 'Depth (m)', type: 'number', default: 1.8, min: 1, max: 4 },
+  ],
+};
+
+/** Effective property value: element override or schema default. */
+export function propOf<T extends string | number | boolean>(el: StreetElement, key: string, fallback: T): T {
+  const v = el.props?.[key];
+  return (v === undefined ? fallback : v) as T;
+}
+
 /** Signed offsets (positive = left of the centerline) of a component's edges. */
 export function componentSpan(section: EdgeSection, compIndex: number): { hi: number; lo: number } | null {
   const comps = section.components;
@@ -126,7 +174,12 @@ export function resolveOnEdge(edge: StreetEdge, kind: ElementKind, wx: number, w
     const w = span.hi - span.lo;
     if (w < 0.2) continue;
     const inset = Math.min(0.3, w * 0.15); // keep the symbol inside the band
-    const clamped = Math.min(Math.max(off, span.lo + inset), span.hi - inset);
+    let clamped = Math.min(Math.max(off, span.lo + inset), span.hi - inset);
+    // snap to the band's center and edges (drag snapping, CAD-style)
+    const center = (span.hi + span.lo) / 2;
+    if (Math.abs(clamped - center) < 0.25) clamped = center;
+    else if (Math.abs(clamped - (span.lo + inset)) < 0.15) clamped = span.lo + inset;
+    else if (Math.abs(clamped - (span.hi - inset)) < 0.15) clamped = span.hi - inset;
     const d = Math.abs(off - clamped);
     if (!best || d < best.d) best = { compIndex: i, t: (span.hi - clamped) / w, d };
   }
@@ -252,27 +305,71 @@ export function elementGraphics(edge: StreetEdge, el: StreetElement): Graphic[] 
 
   const f = elementFrame(edge, el);
   switch (el.kind) {
-    case 'tree':
-      return [
-        { shape: 'circle', x: f.x, y: f.y, r: 1.6, fill: 'rgba(74,124,63,0.8)', stroke: '#3c6132', strokeWidth: 0.3 },
-        { shape: 'circle', x: f.x, y: f.y, r: 0.25, fill: '#5d4327' },
+    case 'tree': {
+      const canopy = propOf(el, 'canopyM', 3.2) / 2;
+      const trunk = propOf(el, 'trunkM', 0.35) / 2;
+      const out: Graphic[] = [
+        { shape: 'circle', x: f.x, y: f.y, r: canopy, fill: 'rgba(74,124,63,0.8)', stroke: '#3c6132', strokeWidth: 0.3 },
+        { shape: 'circle', x: f.x, y: f.y, r: Math.max(trunk, 0.1), fill: '#5d4327' },
       ];
-    case 'streetlight':
-      return [
-        { shape: 'circle', x: f.x, y: f.y, r: 1.1, fill: 'rgba(240,200,90,0.35)' },
-        { shape: 'circle', x: f.x, y: f.y, r: 0.3, fill: '#38404a' },
-      ];
-    case 'dustbin':
-      return [{ shape: 'poly', pts: frameRect(edge, s, f.off, 0.7, 0.7), fill: '#2e6e4e', closed: true }];
+      if (propOf(el, 'grating', true)) {
+        out.push({
+          shape: 'poly',
+          pts: frameRect(edge, s, f.off, 1.2, 1.2),
+          stroke: 'rgba(60,60,60,0.7)',
+          strokeWidth: 0.15,
+          closed: true,
+        });
+      }
+      return out;
+    }
+    case 'streetlight': {
+      const mount = propOf(el, 'mount', 'single');
+      const out: Graphic[] = [{ shape: 'circle', x: f.x, y: f.y, r: 0.3, fill: '#38404a' }];
+      if (mount === 'single') {
+        out.push({ shape: 'circle', x: f.x, y: f.y, r: 1.1, fill: 'rgba(240,200,90,0.35)' });
+      } else if (mount === 'double') {
+        // median mast: arms both ways across the street
+        out.push(
+          { shape: 'circle', x: f.x + f.nx * 1.2, y: f.y + f.ny * 1.2, r: 1.1, fill: 'rgba(240,200,90,0.35)' },
+          { shape: 'circle', x: f.x - f.nx * 1.2, y: f.y - f.ny * 1.2, r: 1.1, fill: 'rgba(240,200,90,0.35)' },
+          { shape: 'line', pts: [f.x + f.nx * 1.2, f.y + f.ny * 1.2, f.x - f.nx * 1.2, f.y - f.ny * 1.2], stroke: '#38404a', strokeWidth: 0.12 },
+        );
+      } else {
+        // dual: tall road lamp one side, low footpath lamp the other
+        out.push(
+          { shape: 'circle', x: f.x + f.nx * 1.4, y: f.y + f.ny * 1.4, r: 1.4, fill: 'rgba(240,200,90,0.35)' },
+          { shape: 'circle', x: f.x - f.nx * 0.8, y: f.y - f.ny * 0.8, r: 0.7, fill: 'rgba(240,200,90,0.45)' },
+          { shape: 'line', pts: [f.x + f.nx * 1.4, f.y + f.ny * 1.4, f.x - f.nx * 0.8, f.y - f.ny * 0.8], stroke: '#38404a', strokeWidth: 0.12 },
+        );
+      }
+      return out;
+    }
+    case 'dustbin': {
+      const d = propOf(el, 'diameterM', 0.7);
+      return propOf(el, 'shape', 'round') === 'round'
+        ? [{ shape: 'circle', x: f.x, y: f.y, r: d / 2, fill: '#2e6e4e' }]
+        : [{ shape: 'poly', pts: frameRect(edge, s, f.off, d, d), fill: '#2e6e4e', closed: true }];
+    }
     case 'bench':
       return [{ shape: 'poly', pts: frameRect(edge, s, f.off, 1.6, 0.5), fill: '#7a5230', closed: true }];
     case 'bollard':
       return [{ shape: 'circle', x: f.x, y: f.y, r: 0.22, fill: '#38404a', stroke: '#f2f0e9', strokeWidth: 0.12 }];
-    case 'busstop':
+    case 'busstop': {
+      const len = propOf(el, 'lengthM', 6);
+      const dep = propOf(el, 'depthM', 1.8);
+      if (propOf<string>(el, 'form', 'shelter') === 'stop') {
+        // flag stop: pole + small sign, no shelter footprint
+        return [
+          { shape: 'circle', x: f.x, y: f.y, r: 0.25, fill: '#b3541e' },
+          { shape: 'circle', x: f.x, y: f.y, r: 0.65, stroke: '#b3541e', strokeWidth: 0.2, fill: 'rgba(179,84,30,0.12)' },
+        ];
+      }
       return [
-        { shape: 'poly', pts: frameRect(edge, s, f.off, 6, 1.8), fill: 'rgba(179,84,30,0.25)', stroke: '#b3541e', strokeWidth: 0.5, closed: true },
-        { shape: 'poly', pts: frameRect(edge, s, f.off, 5.2, 0.4), fill: '#b3541e', closed: true },
+        { shape: 'poly', pts: frameRect(edge, s, f.off, len, dep), fill: 'rgba(179,84,30,0.25)', stroke: '#b3541e', strokeWidth: 0.5, closed: true },
+        { shape: 'poly', pts: frameRect(edge, s, f.off, len * 0.85, 0.4), fill: '#b3541e', closed: true },
       ];
+    }
     case 'turnarrow': {
       const len = 3;
       const ax = f.x - f.tx * (len / 2);
@@ -336,6 +433,49 @@ export function laneDividers(edge: StreetEdge, trim?: { start: number; end: numb
   return out;
 }
 
+/** Derived band decals — parking bay ticks and cycle-lane chevrons. Pure
+ *  markings computed from the section (never stored), like laneDividers. */
+export function bandDecals(edge: StreetEdge, trim?: { start: number; end: number }): Graphic[] {
+  if (!edge.section) return [];
+  const out: Graphic[] = [];
+  const L = polylineLength(edge.points);
+  const s0 = (trim?.start ?? 0) + 1;
+  const s1 = L - (trim?.end ?? 0) - 1;
+  if (s1 - s0 < 4) return out;
+  edge.section.components.forEach((c, i) => {
+    const span = componentSpan(edge.section!, i)!;
+    if (c.kind === 'parking' && c.widthM > 1.2) {
+      for (let s = s0 + 2.5; s <= s1; s += 5) {
+        const p = pointAtStation(edge.points, s);
+        out.push({
+          shape: 'line',
+          pts: [p.x + p.nx * span.hi, p.y + p.ny * span.hi, p.x + p.nx * span.lo, p.y + p.ny * span.lo],
+          stroke: '#f2f0e9',
+          strokeWidth: 0.15,
+        });
+      }
+    } else if (c.kind === 'cycle' && c.widthM > 1) {
+      const mid = (span.hi + span.lo) / 2;
+      const w = Math.min(0.5, c.widthM * 0.3);
+      for (let s = s0 + 6; s + 1 <= s1; s += 18) {
+        const p1 = pointAtStation(edge.points, s);
+        const p2 = pointAtStation(edge.points, s + 0.9);
+        out.push({
+          shape: 'line',
+          pts: [
+            p1.x + p1.nx * (mid + w), p1.y + p1.ny * (mid + w),
+            p2.x + p2.nx * mid, p2.y + p2.ny * mid,
+            p1.x + p1.nx * (mid - w), p1.y + p1.ny * (mid - w),
+          ],
+          stroke: '#f2f0e9',
+          strokeWidth: 0.2,
+        });
+      }
+    }
+  });
+  return out;
+}
+
 // ── Suggestions ──────────────────────────────────────────────────────────
 
 const SUGGEST_RULES: Partial<Record<ElementKind, { kinds: ComponentKind[]; spacing: number; minWidth: number }>> = {
@@ -350,9 +490,11 @@ export function suggestElements(
   kind: ElementKind,
   existing: StreetElement[],
   trims: Record<string, { start: number; end: number }>,
+  spacingM?: number,
 ): Array<Omit<StreetElement, 'id'>> {
-  const rule = SUGGEST_RULES[kind];
-  if (!rule) return [];
+  const base = SUGGEST_RULES[kind];
+  if (!base) return [];
+  const rule = spacingM && spacingM >= 1 ? { ...base, spacing: spacingM } : base;
   const out: Array<Omit<StreetElement, 'id'>> = [];
   const taken = existing.filter((e) => e.kind === kind);
   for (const e of Object.values(g.edges)) {
@@ -426,6 +568,50 @@ export function suggestBusStops(
       (x) => x.edgeId === place.edgeId && Math.abs(x.stationM - place.stationM) < 15,
     );
     if (!clash) out.push({ kind: 'busstop', ...place, placedBy: 'suggest' });
+  }
+  return out;
+}
+
+/** Turn arrows at junction approaches, one per lane, lane-discipline by
+ *  handedness (India default LHT: left turns from the leftmost lane, right
+ *  turns cross from the rightmost). Arrows draw along +station, so they're
+ *  suggested on approaches travelling a→b (the edge's own direction). */
+export function suggestTurnArrows(
+  g: GraphState,
+  existing: StreetElement[],
+  trims: Record<string, { start: number; end: number }>,
+  drive: 'lht' | 'rht',
+): Array<Omit<StreetElement, 'id'>> {
+  const out: Array<Omit<StreetElement, 'id'>> = [];
+  const arrows = existing.filter((e) => e.kind === 'turnarrow');
+  const deg: Record<string, number> = {};
+  for (const e of Object.values(g.edges)) {
+    deg[e.a] = (deg[e.a] ?? 0) + 1;
+    deg[e.b] = (deg[e.b] ?? 0) + 1;
+  }
+  const SETBACK = 9; // behind the zebra + stop line zone
+  for (const e of Object.values(g.edges)) {
+    if (!e.section || (deg[e.b] ?? 0) < 3) continue;
+    const ci = e.section.components.findIndex((c) => ALLOWED.turnarrow !== 'drivable' && ALLOWED.turnarrow !== 'raised-side' && ALLOWED.turnarrow.includes(c.kind));
+    if (ci < 0) continue;
+    const L = polylineLength(e.points);
+    const s = L - (trims[e.id]?.end ?? 0) - SETBACK;
+    if (s < 2) continue;
+    if (arrows.some((x) => x.edgeId === e.id && Math.abs(x.stationM - s) < 10)) continue;
+    const lanes = Math.max(1, Math.min(4, e.lanes ?? (e.section.components[ci].widthM >= 6.5 ? 2 : 1)));
+    for (let k = 0; k < lanes; k++) {
+      const t = (k + 0.5) / lanes;
+      // t=0 is the component's left boundary along the travel direction
+      const variant =
+        lanes === 1
+          ? 'through'
+          : k === 0
+            ? drive === 'lht' ? 'left' : 'right'
+            : k === lanes - 1
+              ? drive === 'lht' ? 'right' : 'left'
+              : 'through';
+      out.push({ kind: 'turnarrow', edgeId: e.id, stationM: s, compIndex: ci, t, variant, placedBy: 'suggest' });
+    }
   }
   return out;
 }

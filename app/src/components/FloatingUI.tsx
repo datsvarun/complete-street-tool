@@ -2,8 +2,8 @@
 // basemap FAB, reactive scale bar, compass. Everything overlays the canvas —
 // panels are windows the rail opens, not a fixed sidebar.
 import { useEffect, useRef, useState } from 'react';
-import { useCst } from '../store';
-import type { Basemap } from '../store';
+import { LAYER_LABELS, useCst } from '../store';
+import type { Basemap, LayerKey } from '../store';
 import type { Stage, Tool } from '../types';
 
 const STAGES: Array<{ id: Stage; label: string; icon: string; hint: string }> = [
@@ -58,9 +58,9 @@ const TOOL_GROUPS: ToolDef[][] = [
     { id: 'lasso', icon: '◌', label: 'Lasso', hint: 'Lasso select — draw around streets (L)' },
   ],
   [
-    { id: 'draw', icon: '✎', label: 'Draw', hint: 'Draw streets (D)', stages: ['network'] },
-    { id: 'split', icon: '✂', label: 'Split', hint: 'Split a street at a point (X)', stages: ['network'] },
-    { id: 'erase', icon: '⌫', label: 'Delete', hint: 'Delete — click a street or node to remove it (E)', stages: ['network'] },
+    { id: 'draw', icon: '✎', label: 'Draw', hint: 'Draw streets (D)', stages: ['network', 'sections'] },
+    { id: 'split', icon: '✂', label: 'Split', hint: 'Split a street at a point (X)', stages: ['network', 'sections'] },
+    { id: 'erase', icon: '⌫', label: 'Delete', hint: 'Delete — click a street or node to remove it (E)', stages: ['network', 'sections'] },
   ],
 ];
 
@@ -92,6 +92,47 @@ export function TopToolbar() {
           })}
         </div>
       ))}
+    </div>
+  );
+}
+
+const LAYER_ICONS: Record<LayerKey, string> = {
+  roads: '▤',
+  junctions: '✚',
+  furniture: '❖',
+  markings: '≣',
+  patches: '✦',
+  boundaries: '⌐',
+};
+
+/** Right-edge layer rail: show/hide groups of derived geometry. Collapsible
+ *  so it never fights the compass or the panel for space. */
+export function LayerRail() {
+  const layers = useCst((s) => s.layers);
+  const toggleLayer = useCst((s) => s.toggleLayer);
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="layer-rail overlay">
+      <button
+        className={open ? 'rail-btn active' : 'rail-btn'}
+        title="Layers — show/hide roads, furniture, decals, boundaries"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="rail-icon">≡</span>
+        <span className="rail-label">Layers</span>
+      </button>
+      {open &&
+        (Object.keys(LAYER_LABELS) as LayerKey[]).map((k) => (
+          <button
+            key={k}
+            className={layers[k] ? 'rail-btn' : 'rail-btn off'}
+            title={`${layers[k] ? 'Hide' : 'Show'} ${LAYER_LABELS[k].toLowerCase()}`}
+            onClick={() => toggleLayer(k)}
+          >
+            <span className="rail-icon small">{layers[k] ? LAYER_ICONS[k] : '·'}</span>
+            <span className="rail-label">{LAYER_LABELS[k].split(' ')[0]}</span>
+          </button>
+        ))}
     </div>
   );
 }

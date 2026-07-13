@@ -8,10 +8,10 @@ import { refFraction } from '../geometry/ribbon';
 import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
 import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts, pointInPolygon } from '../geometry/polyline';
-import { BasemapFab, ScaleBar, CompassRose } from './FloatingUI';
+import { BasemapFab, ScaleBar, CompassRose, LayerRail } from './FloatingUI';
 import { nodeClassOf } from '../types';
 import type { Boundary, GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
-import { elementGraphics, laneDividers } from '../detailing/elements';
+import { bandDecals, elementGraphics, laneDividers } from '../detailing/elements';
 import { edgesInRect, edgesNear } from '../geometry/spatialIndex';
 import { applyShapeOverrides, deltaForDrag } from '../cad/vertexOverrides';
 import { degree } from '../graph/ops';
@@ -539,13 +539,11 @@ function ElementShapeImpl({
   edge,
   interactive,
   selected,
-  scale,
 }: {
   el: StreetElement;
   edge: StreetEdge;
   interactive: boolean;
   selected: boolean;
-  scale: number;
 }) {
   const moveElement = useCst((s) => s.moveElement);
   const removeElement = useCst((s) => s.removeElement);
@@ -579,16 +577,37 @@ function ElementShapeImpl({
         removeElement(el.id);
       }}
     >
-      {selected && gfx[0] && (
-        <Circle
-          x={gfx[0].shape === 'circle' ? gfx[0].x : gfx[0].pts![0]}
-          y={gfx[0].shape === 'circle' ? gfx[0].y : gfx[0].pts![1]}
-          radius={8 / scale}
-          stroke="#e08e45"
-          strokeWidth={1.5}
-          strokeScaleEnabled={false}
-        />
-      )}
+      {selected &&
+        (() => {
+          // shape-fitting selection outline (not a floating circle)
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const g of gfx) {
+            if (g.shape === 'circle') {
+              minX = Math.min(minX, g.x! - g.r!); maxX = Math.max(maxX, g.x! + g.r!);
+              minY = Math.min(minY, g.y! - g.r!); maxY = Math.max(maxY, g.y! + g.r!);
+            } else if (g.pts) {
+              for (let i = 0; i + 1 < g.pts.length; i += 2) {
+                minX = Math.min(minX, g.pts[i]); maxX = Math.max(maxX, g.pts[i]);
+                minY = Math.min(minY, g.pts[i + 1]); maxY = Math.max(maxY, g.pts[i + 1]);
+              }
+            }
+          }
+          if (!Number.isFinite(minX)) return null;
+          const pad = 0.4;
+          return (
+            <Rect
+              x={minX - pad}
+              y={minY - pad}
+              width={maxX - minX + pad * 2}
+              height={maxY - minY + pad * 2}
+              stroke="#e08e45"
+              strokeWidth={1.5}
+              dash={[4, 3]}
+              strokeScaleEnabled={false}
+              listening={false}
+            />
+          );
+        })()}
       {gfx.map((g, gi) =>
         g.shape === 'circle' ? (
           <Circle
@@ -626,7 +645,6 @@ function DetailingLayerImpl({
   edges,
   trims,
   interactive,
-  scale,
   selectedElementId,
   dividerEdges,
   showDetail,
@@ -635,7 +653,6 @@ function DetailingLayerImpl({
   edges: Record<string, StreetEdge>;
   trims: Record<string, EdgeTrim>;
   interactive: boolean;
-  scale: number;
   selectedElementId: string | null;
   dividerEdges: StreetEdge[];
   showDetail: boolean;
@@ -649,6 +666,14 @@ function DetailingLayerImpl({
         : [],
     [dividerEdges, trims, showDetail],
   );
+  // parametric decals: parking bay ticks + cycle chevrons (derived per section)
+  const decals = useMemo(
+    () =>
+      showDetail
+        ? dividerEdges.flatMap((e, ei) => bandDecals(e, trims[e.id]).map((g, i) => ({ key: `${ei}-d${i}`, g })))
+        : [],
+    [dividerEdges, trims, showDetail],
+  );
 
   return (
     <Layer listening={interactive}>
@@ -659,6 +684,17 @@ function DetailingLayerImpl({
           stroke="#f2f0e9"
           strokeWidth={0.8}
           dash={[3, 4.5]}
+          strokeScaleEnabled={false}
+          listening={false}
+          perfectDrawEnabled={false}
+        />
+      ))}
+      {decals.map((d) => (
+        <Line
+          key={d.key}
+          points={d.g.pts}
+          stroke={d.g.stroke}
+          strokeWidth={(d.g.strokeWidth ?? 0.15) * 2}
           strokeScaleEnabled={false}
           listening={false}
           perfectDrawEnabled={false}
@@ -679,7 +715,6 @@ function DetailingLayerImpl({
             edge={edge}
             interactive={interactive}
             selected={el.id === selectedElementId}
-            scale={scale}
           />
         );
       })}
@@ -1014,7 +1049,21 @@ function ShapeEditLayer({ shapeKey, base, scale }: { shapeKey: string; base: num
   const r = 4 / scale;
   const n = display.length / 2;
   const dragTo = (i: number, wx: number, wy: number) => {
-    const { key, delta } = deltaForDrag(base, useCst.getState().vertexOverrides[shapeKey], i, wx, wy);
+    // Snap to traced plot boundaries — the whole point of tracing them first
+    // is adjusting footpath edges onto the real land line.
+    const st = useCst.getState();
+    if (st.layers.boundaries) {
+      const tol = 10 / scale;
+      for (const b of Object.values(st.boundaries)) {
+        const proj = projectOnPolyline(b.points, wx, wy);
+        if (proj && proj.dist < tol) {
+          wx = proj.x;
+          wy = proj.y;
+          break;
+        }
+      }
+    }
+    const { key, delta } = deltaForDrag(base, st.vertexOverrides[shapeKey], i, wx, wy);
     setVertexDelta(shapeKey, key, delta);
   };
   return (
@@ -1216,6 +1265,8 @@ export function CanvasStage() {
   const highlightEdges = useCst((s) => s.highlightEdges);
   const draft = useCst((s) => s.draft);
   const pendingFit = useCst((s) => s.pendingFit);
+  const settings = useCst((s) => s.settings);
+  const layers = useCst((s) => s.layers);
   const addDraftVert = useCst((s) => s.addDraftVert);
   const finishDraft = useCst((s) => s.finishDraft);
 
@@ -1225,7 +1276,7 @@ export function CanvasStage() {
   const patchList = useMemo(() => Object.values(patches), [patches]);
 
   // ── Viewport culling + LOD (perf: only mount what the view can show) ──
-  const showDetail = view.scale >= DETAIL_SCALE;
+  const showDetail = !settings.lod || view.scale >= DETAIL_SCALE;
   // Quantize the camera for culling: the cull rect only changes on
   // quarter-viewport pan steps / half-octave zoom steps, so the culled arrays
   // keep their identity while panning — otherwise every drag frame would
@@ -1280,9 +1331,13 @@ export function CanvasStage() {
   const artifacts = useMemo(
     () =>
       showSections
-        ? deriveNodeArtifactsCached({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns)
+        ? deriveNodeArtifactsCached(
+            { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 },
+            junctionDesigns,
+            settings.junctionBlend,
+          )
         : { junctions: [], transitions: [], trims: {} },
-    [nodes, edges, showSections, junctionDesigns],
+    [nodes, edges, showSections, junctionDesigns, settings.junctionBlend],
   );
   const focusedJunction =
     stage === 'junctions' && selectedJunctionKey
@@ -1436,6 +1491,31 @@ export function CanvasStage() {
   };
 
   const onMouseDown = (e: KonvaEventObject<MouseEvent>) => {
+    // Middle-drag pans in ANY mode — lets you keep drawing across the screen
+    // edge without dropping the draft.
+    if (e.evt.button === 1) {
+      e.evt.preventDefault(); // no browser autoscroll
+      const startX = e.evt.clientX;
+      const startY = e.evt.clientY;
+      const v0 = { x: view.x, y: view.y };
+      const move = (me: MouseEvent) => {
+        pendingViewRef.current = { x: v0.x + me.clientX - startX, y: v0.y + me.clientY - startY };
+        if (viewRafRef.current === null) {
+          viewRafRef.current = requestAnimationFrame(() => {
+            viewRafRef.current = null;
+            const p = pendingViewRef.current;
+            if (p) setView((v) => ({ ...v, x: p.x, y: p.y }));
+          });
+        }
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      return;
+    }
     if (e.evt.button !== 0) return;
     if (boxDraw) {
       const w = toWorld(e.target.getStage()!);
@@ -1699,7 +1779,7 @@ export function CanvasStage() {
         onTouchEnd={onTouchEnd}
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
-        {showSections && (
+        {showSections && layers.junctions && (
           <ArtifactsLayer
             artifacts={visibleArtifacts}
             stage={stage}
@@ -1714,10 +1794,11 @@ export function CanvasStage() {
           selectedEdgeIds={selectedEdgeIds}
           highlightEdges={highlightEdges}
           tool={tool}
-          showSections={showSections}
+          // roads layer off → fall back to centerline rendering
+          showSections={showSections && layers.roads}
           trims={artifacts.trims}
-          opacity={showSections ? designOpacity : 1}
-          showDetail={showDetail}
+          opacity={showSections && layers.roads ? designOpacity : 1}
+          showDetail={showDetail && layers.markings}
         />
         {stage === 'network' && (
           <VerticesLayer edges={visibleEdges} scale={view.scale} draggable={tool === 'direct'} />
@@ -1730,7 +1811,7 @@ export function CanvasStage() {
             draggable={tool === 'direct'}
           />
         )}
-        {boundaryList.length > 0 && (
+        {boundaryList.length > 0 && layers.boundaries && (
           <BoundariesLayer
             boundaries={boundaryList}
             interactive={stage === 'network'}
@@ -1742,7 +1823,7 @@ export function CanvasStage() {
         {stage === 'edit' && selectedShapeKey && selectedShapeBase && (
           <ShapeEditLayer shapeKey={selectedShapeKey} base={selectedShapeBase} scale={view.scale} />
         )}
-        {showSections && patchList.length > 0 && (
+        {showSections && patchList.length > 0 && layers.patches && (
           <PatchesLayer
             patches={patchList}
             interactive={stage === 'edit'}
@@ -1750,16 +1831,15 @@ export function CanvasStage() {
             scale={view.scale}
           />
         )}
-        {showSections && Object.keys(elements).length > 0 && (
+        {showSections && Object.keys(elements).length > 0 && layers.furniture && (
           <DetailingLayer
             elements={visibleElements}
             edges={edges}
             dividerEdges={visibleEdges}
             trims={artifacts.trims}
             interactive={stage === 'detailing'}
-            scale={view.scale}
             selectedElementId={selectedElementId}
-            showDetail={showDetail}
+            showDetail={showDetail && layers.markings}
           />
         )}
         <Layer listening={false}>
@@ -1879,6 +1959,7 @@ export function CanvasStage() {
         <ScaleBar scale={view.scale} />
       </div>
       <CompassRose />
+      <LayerRail />
       <div className="overlay hint-pill">{hint}</div>
       <div className="overlay coords-pill" ref={coordsRef} />
     </div>

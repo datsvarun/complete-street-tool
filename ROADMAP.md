@@ -35,6 +35,10 @@ deploy:pages` then push (GitHub Pages, deploy-from-branch).
 | Canvas performance layer (LOD, viewport culling, imperative pointer path) | **shipped** — ARCHITECTURE §8 |
 | UI maturity: status toast, shortcut help (?), mobile (touch pinch/tap, bottom-sheet panels) | **shipped** |
 | **3D scaffold**: `scene3d/buildScene` spec + lazy three.js viewer (header "3D") | **shipped** — extrusions/kerbs/trees/lights |
+| Settings (theme day/night, LHT/RHT, junction blend, LOD) + layer sidebar | **shipped** |
+| Street-tool overhaul (kind merges → MUZ/Green Buffer/Bus lane, Standard rule-of-thirds sections, mini cross-section catalog, in-place component swap, manual centerline) | **shipped** |
+| Detailing depth v1 (object properties, shape-fit selection, band snapping, c/c spacing, parking/cycle decals, LHT turn-arrow suggest) | **shipped** — full per-object toolset still open |
+| **GeoJSON export** (WGS84 FeatureCollection, layer-tagged) | **shipped** — DXF designed in `Export_Design.md` |
 | CAD P2 generic `<HandleLayer>` refactor | **not started** — next structural cleanup |
 | Junctions J5–J7 (signal/priority templates, full roundabout, probe/validation) | **not started** |
 | Detailing depth (element properties, signs, signals) | **partial** |

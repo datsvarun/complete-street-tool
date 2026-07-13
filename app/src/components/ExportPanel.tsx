@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useCst } from '../store';
 import { esc, framePlanSvg, planContent } from '../export/plan';
+import { buildGeoJson } from '../export/geojson';
 
 const SCALES = [200, 250, 500, 1000, 2000];
 
@@ -12,6 +13,7 @@ export function ExportPanel() {
   const patches = useCst((s) => s.patches);
   const boundaries = useCst((s) => s.boundaries);
   const vertexOverrides = useCst((s) => s.vertexOverrides);
+  const junctionBlend = useCst((s) => s.settings.junctionBlend);
   const exportBounds = useCst((s) => s.exportBounds);
   const boxDraw = useCst((s) => s.boxDraw);
   const setBoxDraw = useCst((s) => s.setBoxDraw);
@@ -32,8 +34,9 @@ export function ExportPanel() {
         Object.values(patches),
         Object.values(boundaries),
         vertexOverrides,
+        junctionBlend,
       ),
-    [nodes, edges, junctionDesigns, elements, patches, boundaries, vertexOverrides],
+    [nodes, edges, junctionDesigns, elements, patches, boundaries, vertexOverrides, junctionBlend],
   );
   const plan = useMemo(
     () =>
@@ -69,6 +72,31 @@ export function ExportPanel() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `${title.replace(/[^\w]+/g, '_').toLowerCase()}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadGeoJson = () => {
+    const s = useCst.getState();
+    if (!s.origin) {
+      useCst.setState({ statusMsg: 'GeoJSON needs a map anchor — import from OSM or search a place first' });
+      return;
+    }
+    const json = buildGeoJson(
+      { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 },
+      s.origin,
+      junctionDesigns,
+      Object.values(elements),
+      Object.values(patches),
+      Object.values(s.boundaries),
+      vertexOverrides,
+      junctionBlend,
+    );
+    const blob = new Blob([json], { type: 'application/geo+json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${title.replace(/[^\w]+/g, '_').toLowerCase()}.geojson`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -130,6 +158,14 @@ export function ExportPanel() {
         </button>
         <button className="chip" onClick={download} disabled={!plan}>
           Download SVG
+        </button>
+        <button
+          className="chip"
+          onClick={downloadGeoJson}
+          disabled={!hasContent}
+          title="Whole design as WGS84 GeoJSON — centerlines, bands, junctions, elements, boundaries"
+        >
+          Download GeoJSON
         </button>
       </div>
       {plan && (

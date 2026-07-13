@@ -28,12 +28,42 @@ export function NetworkPanel() {
   const importBox = useCst((s) => s.importBox);
   const setBox = useCst((s) => s.setBox);
   const loadSample = useCst((s) => s.loadSample);
+  const mergeNodePair = useCst((s) => s.mergeNodePair);
+  const focusNode = useCst((s) => s.focusNode);
   const scanDualCarriageways = useCst((s) => s.scanDualCarriageways);
   const applyDcMerge = useCst((s) => s.applyDcMerge);
   const setHighlight = useCst((s) => s.setHighlight);
 
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const issues = useMemo(() => validateGraph({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }), [nodes, edges]);
+
+  // Unconnected node pairs closer than 2 m — junction geometry degenerates on
+  // these later, so surface them with a one-click merge (grid-bucketed scan).
+  const nearPairs = useMemo(() => {
+    const TOL = 2;
+    const cells = new Map<string, string[]>();
+    for (const n of Object.values(nodes)) {
+      const k = `${Math.floor(n.x / TOL)}:${Math.floor(n.y / TOL)}`;
+      (cells.get(k) ?? cells.set(k, []).get(k)!).push(n.id);
+    }
+    const linked = new Set(Object.values(edges).flatMap((e) => [`${e.a}|${e.b}`, `${e.b}|${e.a}`]));
+    const out: Array<{ a: string; b: string; d: number }> = [];
+    for (const n of Object.values(nodes)) {
+      const cx = Math.floor(n.x / TOL);
+      const cy = Math.floor(n.y / TOL);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (const mid of cells.get(`${cx + dx}:${cy + dy}`) ?? []) {
+            if (mid <= n.id) continue; // each pair once
+            const m = nodes[mid];
+            const d = Math.hypot(m.x - n.x, m.y - n.y);
+            if (d < TOL && !linked.has(`${n.id}|${mid}`)) out.push({ a: n.id, b: mid, d });
+          }
+        }
+      }
+    }
+    return out.sort((p, q) => p.d - q.d).slice(0, 12);
+  }, [nodes, edges]);
   const selected = selectedEdgeId ? edges[selectedEdgeId] : null;
 
   return (
@@ -151,6 +181,27 @@ export function NetworkPanel() {
       ))}
 
       <h3>Validation</h3>
+      {nearPairs.length > 0 && (
+        <>
+          <p className="small issues-inline">
+            ⚠ {nearPairs.length} node pair(s) closer than 2 m — merge them to
+            avoid junction geometry errors later.
+          </p>
+          <ul className="edge-list">
+            {nearPairs.map((p) => (
+              <li key={`${p.a}-${p.b}`} className="row-between small">
+                <button onClick={() => focusNode(p.a)}>
+                  {p.a} ↔ {p.b}
+                  <span className="muted small"> · {p.d.toFixed(2)} m apart</span>
+                </button>
+                <button className="mini" onClick={() => mergeNodePair(p.a, p.b)}>
+                  Merge
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {issues.length === 0 ? (
         <p className="ok small">✓ graph valid — no dangling refs, no zero-length edges</p>
       ) : (
