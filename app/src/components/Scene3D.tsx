@@ -37,7 +37,7 @@ export default function Scene3D({ onClose }: { onClose: () => void }) {
       Object.values(s.elements),
       Object.values(s.patches),
       s.vertexOverrides,
-      s.settings.junctionBlend,
+      s.settings.junctionCorners,
     );
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });

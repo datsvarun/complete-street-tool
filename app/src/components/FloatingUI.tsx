@@ -10,9 +10,10 @@ const STAGES: Array<{ id: Stage; label: string; icon: string; hint: string }> = 
   { id: 'network', label: 'Network', icon: '◈', hint: 'Draw & edit the street network (1)' },
   { id: 'sections', label: 'Street', icon: '☰', hint: 'Assign cross-sections (2)' },
   { id: 'junctions', label: 'Junction', icon: '✚', hint: 'Fillets, trims & movements (3)' },
-  { id: 'detailing', label: 'Detail', icon: '❖', hint: 'Furniture, markings, crossings (4)' },
-  { id: 'edit', label: 'Edit', icon: '✦', hint: 'Free-form shape patches & cuts (5)' },
-  { id: 'export', label: 'Export', icon: '⇩', hint: 'Print or download the plan (6)' },
+  { id: 'mesh', label: 'Mesh', icon: '⬡', hint: 'Node-mesh editing — reshape everything (4)' },
+  { id: 'detailing', label: 'Detail', icon: '❖', hint: 'Furniture, markings, crossings (5)' },
+  { id: 'edit', label: 'Edit', icon: '✦', hint: 'Free-form shape patches & cuts (6)' },
+  { id: 'export', label: 'Export', icon: '⇩', hint: 'Print or download the plan (7)' },
 ];
 
 export function StageRail({

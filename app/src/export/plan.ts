@@ -5,10 +5,12 @@ import type { Boundary, GraphState, JunctionDesign, Patch, StreetElement } from 
 import { KIND_COLORS } from '../catalog';
 import { buildEdgeGeometry } from '../sections/transition';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
+import type { CornerMode } from '../graph/junctions';
 import { bandDecals, elementGraphics, laneDividers } from '../detailing/elements';
 import { graphBounds } from '../graph/ops';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
 import type { VertexOverrides } from '../cad/vertexOverrides';
+import type { Mesh, MeshFace } from '../mesh/engine';
 
 export function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -36,36 +38,56 @@ export function planContent(
   patches: Patch[] = [],
   boundaries: Boundary[] = [],
   vertexOverrides: VertexOverrides = {},
-  blend = true,
+  corners: CornerMode = 'blend',
+  mesh: Mesh | null = null,
 ): string {
-  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
+  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, corners);
   const out: string[] = [];
 
-  // 1. carriageway surface + wedges + noses (junctions under ribbons)
-  for (const j of junctions) {
-    for (const b of j.coverBands) out.push(poly(b, '#525e6a', 'none', 0));
-    out.push(
-      poly(applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]), '#525e6a', 'rgba(30,35,40,0.4)', 0.15),
-    );
+  // 0. a frozen node-mesh replaces all generated surfaces (1–3): the mesh IS
+  // the design once it exists — junction ring first, then everything else.
+  if (mesh) {
+    const faceFill = (fn: MeshFace['fn']) =>
+      fn === 'junction' ? '#525e6a' : fn === 'island' ? KIND_COLORS.median : KIND_COLORS[fn];
+    const sorted = [...mesh.faces].sort((a, b) => (a.fn === 'junction' ? -1 : 0) - (b.fn === 'junction' ? -1 : 0));
+    for (const f of sorted) {
+      const pts: number[] = [];
+      for (const nid of f.nodes) {
+        const p = mesh.nodes[nid];
+        if (p) pts.push(p.x, p.y);
+      }
+      if (pts.length >= 6) out.push(poly(pts, faceFill(f.fn), 'rgba(30,35,40,0.35)', 0.12));
+    }
   }
+
+  // 1. carriageway surface + wedges + noses (junctions under ribbons)
+  if (!mesh)
+    for (const j of junctions) {
+      for (const b of j.coverBands) out.push(poly(b, '#525e6a', 'none', 0));
+      out.push(
+        poly(applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]), '#525e6a', 'rgba(30,35,40,0.4)', 0.15),
+      );
+    }
 
   // 2. edge ribbons (bands + markings), trimmed at junction mouths
   for (const e of Object.values(g.edges)) {
     if (!e.section) continue;
     const { bands, markings } = buildEdgeGeometry(e, trims[e.id]);
-    for (const b of bands) {
-      const pts = applyShapeOverrides(b.polygon, vertexOverrides[`band:${e.id}:${b.key}`]);
-      out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
-    }
+    if (!mesh)
+      for (const b of bands) {
+        const pts = applyShapeOverrides(b.polygon, vertexOverrides[`band:${e.id}:${b.key}`]);
+        out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
+      }
     for (const m of markings) out.push(pline(m.line, '#f2f0e9', 0.2, m.dashed ? [1, 1] : undefined));
   }
 
   // 3. junction wedges / noses / transitions on top of ribbons
   for (const j of junctions) {
-    for (const b of [...j.wedges, ...j.noses]) {
-      const pts = applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`]);
-      out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
-    }
+    if (!mesh)
+      for (const b of [...j.wedges, ...j.noses]) {
+        const pts = applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`]);
+        out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
+      }
     if (j.roundabout) {
       const r = j.roundabout;
       out.push(

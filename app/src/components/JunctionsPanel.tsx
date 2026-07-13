@@ -22,11 +22,11 @@ export function JunctionsPanel() {
   const setApproachTrim = useCst((s) => s.setApproachTrim);
   const removeJunctionDesign = useCst((s) => s.removeJunctionDesign);
 
-  const junctionBlend = useCst((s) => s.settings.junctionBlend);
+  const junctionCorners = useCst((s) => s.settings.junctionCorners);
   const { junctions, transitions } = useMemo(
     () =>
-      deriveNodeArtifactsCached({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns, junctionBlend),
-    [nodes, edges, junctionDesigns, junctionBlend],
+      deriveNodeArtifactsCached({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }, junctionDesigns, junctionCorners),
+    [nodes, edges, junctionDesigns, junctionCorners],
   );
   const anySection = Object.values(edges).some((e) => e.section);
 

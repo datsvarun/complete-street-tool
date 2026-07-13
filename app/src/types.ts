@@ -1,7 +1,7 @@
 // All coordinates are metres in a local planar CRS (x right, y down).
 // Lat/lon exists only at import/export boundaries (Plan v2 / CLAUDE.md rule).
 
-export type Stage = 'network' | 'sections' | 'junctions' | 'detailing' | 'edit' | 'export';
+export type Stage = 'network' | 'sections' | 'junctions' | 'mesh' | 'detailing' | 'edit' | 'export';
 
 export type Tool = 'select' | 'direct' | 'draw' | 'split' | 'erase' | 'marquee' | 'lasso';
 

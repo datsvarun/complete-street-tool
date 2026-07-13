@@ -6,9 +6,11 @@ import type { Boundary, GraphState, JunctionDesign, Patch, StreetElement } from 
 import type { LatLon } from '../osm/overpass';
 import { toLatLon } from '../osm/overpass';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
+import type { CornerMode } from '../graph/junctions';
 import { buildEdgeGeometry } from '../sections/transition';
 import { elementFrame } from '../detailing/elements';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
+import type { Mesh } from '../mesh/engine';
 import type { VertexOverrides } from '../cad/vertexOverrides';
 
 type Feature = {
@@ -42,10 +44,29 @@ export function buildGeoJson(
   patches: Patch[],
   boundaries: Boundary[],
   vertexOverrides: VertexOverrides = {},
-  blend = true,
+  corners: CornerMode = 'blend',
+  mesh: Mesh | null = null,
 ): string {
-  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
+  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, corners);
   const features: Feature[] = [];
+
+  // A frozen node-mesh replaces every generated surface polygon — one feature
+  // per face, carrying its function and id.
+  if (mesh) {
+    for (const f of mesh.faces) {
+      const pts: number[] = [];
+      for (const nid of f.nodes) {
+        const p = mesh.nodes[nid];
+        if (p) pts.push(p.x, p.y);
+      }
+      if (pts.length < 6) continue;
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: polygonCoords(origin, pts) },
+        properties: { layer: 'mesh-face', id: f.id, fn: f.fn, kind: f.kind, edgeId: f.edge ?? null },
+      });
+    }
+  }
 
   for (const e of Object.values(g.edges)) {
     features.push({
@@ -61,7 +82,7 @@ export function buildGeoJson(
         rowWidthM: e.section ? e.section.components.reduce((s, c) => s + c.widthM, 0) : null,
       },
     });
-    if (!e.section) continue;
+    if (!e.section || mesh) continue;
     const { bands } = buildEdgeGeometry(e, trims[e.id]);
     for (const b of bands) {
       features.push({
@@ -75,7 +96,7 @@ export function buildGeoJson(
     }
   }
 
-  for (const j of junctions) {
+  for (const j of mesh ? [] : junctions) {
     features.push({
       type: 'Feature',
       geometry: {

@@ -28,7 +28,7 @@ function Toast() {
 }
 
 const SHORTCUTS: Array<[string, string]> = [
-  ['1 – 6', 'Stages: Network · Street · Junction · Detail · Edit · Export'],
+  ['1 – 7', 'Stages: Network · Street · Junction · Mesh · Detail · Edit · Export'],
   ['V / A', 'Select · Direct selection (move nodes & vertices)'],
   ['M / L', 'Rectangle · Lasso selection'],
   ['D / X / E', 'Draw · Split · Delete street (network stage)'],
@@ -71,15 +71,35 @@ function SettingsOverlay({ onClose }: { onClose: () => void }) {
             </button>
           </div>
           <label>Junctions</label>
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={settings.junctionBlend}
-              onChange={(e) => setSetting('junctionBlend', e.target.checked)}
-            />
-            Blend unmatched footpaths/verges around corners (wedges). Off: bands
-            simply end at the junction. Mid-street split transitions are always on.
-          </label>
+          <div>
+            <div className="tool-row">
+              <button
+                className={settings.junctionCorners === 'common' ? 'active' : ''}
+                title="Only elements present on BOTH streets sweep the corner at their own width — fillet, no transition (default)"
+                onClick={() => setSetting('junctionCorners', 'common')}
+              >
+                Common merge
+              </button>
+              <button
+                className={settings.junctionCorners === 'blend' ? 'active' : ''}
+                title="Unmatched elements transition in and out around the corner (wedges/aprons)"
+                onClick={() => setSetting('junctionCorners', 'blend')}
+              >
+                Transition
+              </button>
+              <button
+                className={settings.junctionCorners === 'off' ? 'active' : ''}
+                title="Every band simply ends at the junction mouth"
+                onClick={() => setSetting('junctionCorners', 'off')}
+              >
+                Off
+              </button>
+            </div>
+            <p className="muted small" style={{ marginTop: 4 }}>
+              Corner behaviour where streets meet. Mid-street split transitions
+              are always on.
+            </p>
+          </div>
           <label>Performance</label>
           <label className="check">
             <input type="checkbox" checked={settings.lod} onChange={(e) => setSetting('lod', e.target.checked)} />
@@ -127,6 +147,7 @@ import { JunctionsPanel } from './components/JunctionsPanel';
 import { DetailingPanel } from './components/DetailingPanel';
 import { ExportPanel } from './components/ExportPanel';
 import { EditPanel } from './components/EditPanel';
+import { MeshPanel } from './components/MeshPanel';
 import { StageRail, TopToolbar } from './components/FloatingUI';
 import type { Stage, Tool } from './types';
 
@@ -134,9 +155,10 @@ const STAGE_KEYS: Record<string, Stage> = {
   '1': 'network',
   '2': 'sections',
   '3': 'junctions',
-  '4': 'detailing',
-  '5': 'edit',
-  '6': 'export',
+  '4': 'mesh',
+  '5': 'detailing',
+  '6': 'edit',
+  '7': 'export',
 };
 
 const TOOL_KEYS: Record<string, Tool> = {
@@ -330,6 +352,8 @@ export default function App() {
               <SectionsPanel />
             ) : stage === 'junctions' ? (
               <JunctionsPanel />
+            ) : stage === 'mesh' ? (
+              <MeshPanel />
             ) : stage === 'detailing' ? (
               <DetailingPanel />
             ) : stage === 'edit' ? (

@@ -42,6 +42,8 @@ import type { BusStopPoint, ImportFilters, LatLon } from './osm/overpass';
 import { getSection } from './catalog';
 import { autoAssignSections, materialize } from './sections/rules';
 import { clearAutosave, fromDocument, readAutosave, writeAutosave } from './persistence';
+import { buildMesh, cutAcross, deleteFaceAbsorb, filletNode, insertOnSegment, mergeFaces, moveNode as meshMove, retypeFace, splitFace, weldNodes } from './mesh/engine';
+import type { Mesh, MeshFn } from './mesh/engine';
 import type { VertexDelta, VertexOverrides } from './cad/vertexOverrides';
 
 // One shared store across all stages; stage is a UI mode, not a data boundary
@@ -56,9 +58,11 @@ export interface AppSettings {
   theme: 'day' | 'night';
   /** Traffic handedness: drives turn-arrow suggestions (India = LHT). */
   drive: 'lht' | 'rht';
-  /** Blend unmatched components around junction corners (wedges). Off =
-   *  non-matching bands simply end at the junction (user default). */
-  junctionBlend: boolean;
+  /** Junction corners: 'common' (default) sweeps only components PRESENT ON
+   *  BOTH legs around the corner at their own widths (fillet, no transition);
+   *  'blend' adds transitions for unmatched components (wedges/aprons);
+   *  'off' — bands simply end at the junction mouth. */
+  junctionCorners: 'off' | 'common' | 'blend';
   /** Hide sub-pixel detail when zoomed out (perf LOD). */
   lod: boolean;
 }
@@ -83,7 +87,7 @@ const DEFAULT_LAYERS: Record<LayerKey, boolean> = {
   boundaries: true,
 };
 
-const DEFAULT_SETTINGS: AppSettings = { theme: 'day', drive: 'lht', junctionBlend: false, lod: true };
+const DEFAULT_SETTINGS: AppSettings = { theme: 'day', drive: 'lht', junctionCorners: 'common', lod: true };
 const SETTINGS_KEY = 'cst.settings.v1';
 
 function readSettings(): AppSettings {
@@ -149,6 +153,14 @@ interface CstState extends GraphState {
   settings: AppSettings;
   /** Layer visibility (UI state): hiding a layer never touches the data. */
   layers: Record<LayerKey, boolean>;
+  /** Frozen node-mesh (MESH_INTEGRATION_SPEC): generated on entering the Mesh
+   *  stage; ALL geometry editing then happens here. Undoable + persisted.
+   *  Graph/section changes reset it (confirmed when it carries manual edits). */
+  mesh: Mesh | null;
+  meshTool: 'select' | 'addnode' | 'split' | 'cut' | 'merge' | 'fillet' | 'delete';
+  selectedFaceId: string | null;
+  meshPick: string | null; // first pick of two-step split/merge
+  filletR: number;
 
   setStage: (stage: Stage) => void;
   setTool: (tool: Tool) => void;
@@ -245,6 +257,23 @@ interface CstState extends GraphState {
   clearAll: () => void;
   setSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   toggleLayer: (key: LayerKey) => void;
+  /** True = ok to change graph/sections (mesh cleared, confirmed if edited). */
+  guardMeshEdit: () => boolean;
+  generateMesh: () => void;
+  resetMesh: () => void;
+  setMeshTool: (t: CstState['meshTool']) => void;
+  selectFace: (id: string | null) => void;
+  setFilletR: (r: number) => void;
+  meshApply: (next: Mesh | null, msg?: string) => void;
+  meshMoveNode: (nid: string, x: number, y: number, quiet?: boolean) => void;
+  meshRetypeSelected: (fn: MeshFn) => void;
+  meshDeleteFace: (id: string) => void;
+  meshInsertNode: (a: string, b: string, x: number, y: number) => void;
+  meshSplitPick: (nid: string) => void;
+  meshMergePick: (faceId: string) => void;
+  meshCut: (edgeId: string, si: number, t: number) => void;
+  meshFillet: (nid: string) => void;
+  meshWeld: (drag: string, target: string) => void;
 }
 
 const EMPTY_DESIGN: JunctionDesign = {
@@ -337,6 +366,11 @@ export const useCst = create<CstState>()(
       reviewList: [],
       settings: readSettings(),
       layers: { ...DEFAULT_LAYERS },
+      mesh: null,
+      meshTool: 'select',
+      selectedFaceId: null,
+      meshPick: null,
+      filletR: 3,
 
       setStage: (stage) => {
         // Leaving any stage drops all transient drawing/placement modes so
@@ -355,6 +389,8 @@ export const useCst = create<CstState>()(
           placeKind: null,
           selectedShapeKey: null,
         });
+        // Entering the Mesh stage freezes the design into the node-mesh.
+        if (stage === 'mesh' && !get().mesh) get().generateMesh();
         // First entry into Sections with unassigned tagged edges → auto-assign
         // + review list (Plan v2 §3.3), never overwriting existing work.
         if (stage === 'sections') {
@@ -384,6 +420,7 @@ export const useCst = create<CstState>()(
       popDraftVert: () => set((s) => ({ draft: s.draft.slice(0, -1) })),
 
       finishDraft: (tolWorld) => {
+        if (!get().guardMeshEdit()) return;
         const s = get();
         const { g, created } = commitDraft(pickGraph(s), s.draft, tolWorld);
         set({
@@ -439,6 +476,7 @@ export const useCst = create<CstState>()(
         }),
 
       removeEdges: (ids) =>
+        get().guardMeshEdit() &&
         set((s) => {
           let g = pickGraph(s);
           for (const id of ids) g = deleteEdge(g, id);
@@ -461,6 +499,7 @@ export const useCst = create<CstState>()(
         set((s) => ({ ...removeEdgeVertex(pickGraph(s), edgeId, idx), statusMsg: 'vertex removed' })),
 
       flipSection: (edgeId) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const e = s.edges[edgeId];
           if (!e?.section) return {};
@@ -508,6 +547,7 @@ export const useCst = create<CstState>()(
       removeNode: (id) => set((s) => ({ ...deleteNode(pickGraph(s), id), dcCandidates: null })),
 
       assignSection: (edgeId, catalogId) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const cat = getSection(catalogId);
           const section = cat ? materialize(cat) : null;
@@ -520,6 +560,7 @@ export const useCst = create<CstState>()(
         }),
 
       assignSectionToSelected: (catalogId) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const ids = s.selectedEdgeIds.filter((id) => s.edges[id]);
           if (ids.length === 0) return {};
@@ -539,6 +580,7 @@ export const useCst = create<CstState>()(
         }),
 
       updateSectionComponents: (edgeId, components) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const e = s.edges[edgeId];
           if (!e?.section) return {};
@@ -583,6 +625,7 @@ export const useCst = create<CstState>()(
       // Right-click delete: terminus/junction nodes go with their edges;
       // a degree-2 node heals — its two streets join without the bend.
       removeNodeSmart: (nodeId) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const g = pickGraph(s);
           const deg = Object.values(s.edges).reduce(
@@ -635,11 +678,13 @@ export const useCst = create<CstState>()(
       moveNodeTo: (id, x, y) => set((s) => ({ ...moveNode(pickGraph(s), id, x, y) })),
 
       mergeNodePair: (keep, drop) =>
+        get().guardMeshEdit() &&
         set((s) => ({ ...mergeNodes(pickGraph(s), keep, drop), statusMsg: `merged ${drop} into ${keep}` })),
 
       // Drop a node onto an edge: split the edge there and weld the node in
       // (one undoable step). The dragged node's streets rewire to the split point.
       weldNodeToEdge: (nodeId, edgeId, x, y) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const oldEdge = s.edges[edgeId];
           const res = splitEdge(pickGraph(s), edgeId, x, y);
@@ -655,6 +700,7 @@ export const useCst = create<CstState>()(
         }),
 
       splitEdgeAt: (edgeId, x, y) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const oldEdge = s.edges[edgeId];
           const res = splitEdge(pickGraph(s), edgeId, x, y);
@@ -667,12 +713,14 @@ export const useCst = create<CstState>()(
         }),
 
       simplifyAll: (tolM) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const { g, removed } = simplifyEdges(pickGraph(s), tolM);
           return { ...g, statusMsg: `${removed} vertex/vertices removed` };
         }),
 
       cleanNetwork: () =>
+        get().guardMeshEdit() &&
         set((s) => {
           const { g, summary } = runStandardPipeline(pickGraph(s));
           return { ...g, elements: pruneElements(g, s.elements), dcCandidates: null, statusMsg: summary };
@@ -776,6 +824,7 @@ export const useCst = create<CstState>()(
         }),
 
       applyDcMerge: (c) =>
+        get().guardMeshEdit() &&
         set((s) => {
           const g = mergeDualCarriageway(pickGraph(s), c);
           return {
@@ -883,7 +932,7 @@ export const useCst = create<CstState>()(
 
       suggest: (kind, spacingM) =>
         set((s) => {
-          const { trims } = deriveNodeArtifactsCached(pickGraph(s), s.junctionDesigns, s.settings.junctionBlend);
+          const { trims } = deriveNodeArtifactsCached(pickGraph(s), s.junctionDesigns, s.settings.junctionCorners);
           const existing = Object.values(s.elements);
           const created =
             kind === 'zebra'
@@ -1182,6 +1231,112 @@ export const useCst = create<CstState>()(
       toggleLayer: (key) =>
         set((s) => ({ layers: { ...s.layers, [key]: !s.layers[key] } })),
 
+      // ── Node-mesh (MESH_INTEGRATION_SPEC) ────────────────────────────
+      guardMeshEdit: () => {
+        const m = get().mesh;
+        if (!m) return true;
+        if (
+          m.editLog.length > 0 &&
+          !window.confirm(
+            `This design carries ${m.editLog.length} manual mesh edit(s) (${[...new Set(m.editLog)].join(', ')}). ` +
+              'Changing the underlying streets will DISCARD them and regenerate the mesh.\n\nContinue and reset the mesh?',
+          )
+        ) {
+          return false;
+        }
+        set({ mesh: null, selectedFaceId: null, meshPick: null, statusMsg: 'mesh reset — regenerate it in the Mesh stage' });
+        return true;
+      },
+
+      generateMesh: () =>
+        set((s) => ({
+          mesh: buildMesh(pickGraph(s), s.junctionDesigns, s.settings.junctionCorners),
+          selectedFaceId: null,
+          meshPick: null,
+          statusMsg: 'mesh generated — every point exists once; abutting shapes share nodes',
+        })),
+
+      resetMesh: () =>
+        set({ mesh: null, selectedFaceId: null, meshPick: null, statusMsg: 'mesh discarded — streets are editable again' }),
+
+      setMeshTool: (t) => set({ meshTool: t, meshPick: null }),
+      selectFace: (id) => set({ selectedFaceId: id }),
+      setFilletR: (r) => set({ filletR: Math.max(0.5, Math.min(20, r)) }),
+
+      meshApply: (next, msg) => {
+        if (next) set({ mesh: next, ...(msg ? { statusMsg: msg } : {}) });
+        else if (msg) set({ statusMsg: msg });
+      },
+
+      meshMoveNode: (nid, x, y, quiet) =>
+        set((s) => {
+          const next = s.mesh && meshMove(s.mesh, nid, x, y, quiet);
+          return next ? { mesh: next } : {};
+        }),
+
+      meshRetypeSelected: (fn) =>
+        set((s) => {
+          if (!s.mesh || !s.selectedFaceId) return {};
+          const next = retypeFace(s.mesh, s.selectedFaceId, fn);
+          return next ? { mesh: next, statusMsg: `face → ${fn}` } : {};
+        }),
+
+      meshDeleteFace: (id) =>
+        set((s) => {
+          const next = s.mesh && deleteFaceAbsorb(s.mesh, id);
+          return next
+            ? { mesh: next, selectedFaceId: null, statusMsg: 'face absorbed into its neighbour' }
+            : { statusMsg: 'cannot delete this face' };
+        }),
+
+      meshInsertNode: (a, b, x, y) =>
+        set((s) => {
+          const next = s.mesh && insertOnSegment(s.mesh, a, b, x, y);
+          return next ? { mesh: next, statusMsg: 'node added on the shared boundary' } : {};
+        }),
+
+      meshSplitPick: (nid) =>
+        set((s) => {
+          if (!s.mesh) return {};
+          if (!s.meshPick) return { meshPick: nid, statusMsg: 'split: now click a second node of the same face' };
+          const face = s.mesh.faces.find((f) => f.nodes.includes(s.meshPick!) && f.nodes.includes(nid));
+          if (!face) return { meshPick: null, statusMsg: 'no face contains both nodes — split cancelled' };
+          const next = splitFace(s.mesh, face.id, s.meshPick, nid);
+          return next
+            ? { mesh: next, meshPick: null, statusMsg: 'face split — retype either half from the dropdown' }
+            : { meshPick: null, statusMsg: 'split failed (chord too short)' };
+        }),
+
+      meshMergePick: (faceId) =>
+        set((s) => {
+          if (!s.mesh) return {};
+          if (!s.meshPick) return { meshPick: faceId, statusMsg: 'merge: now click the abutting face' };
+          const next = mergeFaces(s.mesh, s.meshPick, faceId);
+          return next
+            ? { mesh: next, meshPick: null, selectedFaceId: s.meshPick, statusMsg: 'faces merged' }
+            : { meshPick: null, statusMsg: 'faces do not share an edge chain — weld nodes first' };
+        }),
+
+      meshCut: (edgeId, si, t) =>
+        set((s) => {
+          const next = s.mesh && cutAcross(s.mesh, edgeId, si, t);
+          return next ? { mesh: next, statusMsg: 'street-wide cut — every band split at this station' } : {};
+        }),
+
+      meshFillet: (nid) =>
+        set((s) => {
+          const next = s.mesh && filletNode(s.mesh, nid, s.filletR);
+          return next
+            ? { mesh: next, statusMsg: `corner filleted R=${s.filletR} m (all shapes using it curve together)` }
+            : { statusMsg: 'corner too straight to fillet' };
+        }),
+
+      meshWeld: (drag, target) =>
+        set((s) => {
+          const next = s.mesh && weldNodes(s.mesh, drag, target);
+          return next ? { mesh: next, statusMsg: 'nodes welded — sliver faces removed' } : {};
+        }),
+
       selectShape: (key) => set({ selectedShapeKey: key }),
 
       setVertexDelta: (shapeKey, key, delta) =>
@@ -1241,6 +1396,8 @@ export const useCst = create<CstState>()(
         }),
 
       loadDocument: (raw, label = 'design') => {
+        // a loaded document replaces everything — any live mesh goes with it
+        if (get().mesh) set({ mesh: null, selectedFaceId: null, meshPick: null });
         const slice = fromDocument(raw);
         if (typeof slice === 'string') {
           set({ statusMsg: `Open failed: ${slice}` });
@@ -1331,6 +1488,7 @@ export const useCst = create<CstState>()(
         boundaries: s.boundaries,
         nextBoundaryNum: s.nextBoundaryNum,
         vertexOverrides: s.vertexOverrides,
+        mesh: s.mesh,
       }),
       equality: (a, b) =>
         a.nodes === b.nodes &&
@@ -1339,7 +1497,8 @@ export const useCst = create<CstState>()(
         a.elements === b.elements &&
         a.patches === b.patches &&
         a.boundaries === b.boundaries &&
-        a.vertexOverrides === b.vertexOverrides,
+        a.vertexOverrides === b.vertexOverrides &&
+        a.mesh === b.mesh,
       limit: 100,
     },
   ),
@@ -1373,6 +1532,7 @@ if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
       s.patches === prev.patches &&
       s.boundaries === prev.boundaries &&
       s.vertexOverrides === prev.vertexOverrides &&
+      s.mesh === prev.mesh &&
       s.busStops === prev.busStops
     ) {
       return;

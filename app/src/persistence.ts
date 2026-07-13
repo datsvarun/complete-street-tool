@@ -6,6 +6,7 @@
 import type { Boundary, GraphState, JunctionDesign, Patch, StreetElement } from './types';
 import type { BusStopPoint, LatLon } from './osm/overpass';
 import type { VertexOverrides } from './cad/vertexOverrides';
+import type { Mesh } from './mesh/engine';
 
 export const DOC_VERSION = 1;
 
@@ -21,6 +22,7 @@ export interface CstDocument extends GraphState {
   boundaries: Record<string, Boundary>;
   nextBoundaryNum: number;
   vertexOverrides: VertexOverrides;
+  mesh: Mesh | null;
   busStops: BusStopPoint[];
 }
 
@@ -45,6 +47,7 @@ export function toDocument(s: DocumentSlice): CstDocument {
     boundaries: s.boundaries,
     nextBoundaryNum: s.nextBoundaryNum,
     vertexOverrides: s.vertexOverrides,
+    mesh: s.mesh,
     busStops: s.busStops,
   };
 }
@@ -98,6 +101,7 @@ export function fromDocument(raw: unknown): DocumentSlice | string {
     boundaries: isRecord(raw.boundaries) ? (raw.boundaries as Record<string, Boundary>) : {},
     nextBoundaryNum: num(raw.nextBoundaryNum, maxNum(Object.keys(isRecord(raw.boundaries) ? raw.boundaries : {}), 'b')),
     vertexOverrides: isRecord(raw.vertexOverrides) ? (raw.vertexOverrides as VertexOverrides) : {},
+    mesh: isRecord(raw.mesh) && isRecord((raw.mesh as Record<string, unknown>).nodes) ? (raw.mesh as unknown as Mesh) : null,
     busStops: Array.isArray(raw.busStops) ? (raw.busStops as BusStopPoint[]) : [],
   };
 }

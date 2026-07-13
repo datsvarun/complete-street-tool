@@ -410,12 +410,14 @@ function classifyTurn(dInX: number, dInY: number, dOutX: number, dOutY: number):
   return deg > 0 ? 'right' : 'left';
 }
 
+export type CornerMode = 'off' | 'common' | 'blend';
+
 function computeJunction(
   g: GraphState,
   nodeIds: string[],
   edges: StreetEdge[],
   design?: JunctionDesign,
-  blend = true,
+  cornerMode: CornerMode = 'blend',
 ): ClusterResult | null {
   const inCluster = new Set(nodeIds);
   const approachesRaw: Array<{ edge: StreetEdge; node: string }> = [];
@@ -495,9 +497,10 @@ function computeJunction(
     // lie across the mouths. Leave the surface bare (probe method, slice J7).
     const angularGap =
       (((approaches[(i + 1) % k].angle - a.angle) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-    // Corner wedges blend unmatched raised stacks around the corner; with
-    // blending off (settings default) the bands simply end at the mouths.
-    if (blend && (stackA.length > 0 || stackB.length > 0) && angularGap > MIN_WEDGE_ANGLE) {
+    // Corner sweep modes — 'common' carries only components present on BOTH
+    // legs (fillet, no transition); 'blend' adds transitions for the rest;
+    // 'off' ends every band at the mouth.
+    if (cornerMode !== 'off' && (stackA.length > 0 || stackB.length > 0) && angularGap > MIN_WEDGE_ANGLE) {
       // dedupe joints: duplicated points make zero-length segments whose
       // normals vanish and pinch the sampled bands into spikes
       let path = chaikinSmooth(toFlat(dedupePts(toPts([...segARev, ...corner.arc, ...(segB ?? [])]), 0.08)));
@@ -515,11 +518,16 @@ function computeJunction(
           path = rev;
         }
         let matched = matchComponents(s1, s2);
+        if (cornerMode === 'common') {
+          // Only common elements sweep the corner at their own widths — the
+          // drop/introduce (w=0 taper) entries are exactly the transitions.
+          matched = matched.filter((c) => c.w1 > 0.01 && c.w2 > 0.01);
+        }
         // Wholly unmatched stacks (footpath meeting a green verge): drop/
         // introduce tapers would sweep slivers across both mouths. Pave the
         // corner as ONE apron instead — a single band morphing between the
-        // stack totals, in the wider stack's outermost material.
-        if (!matched.some((c) => c.w1 > 0.01 && c.w2 > 0.01)) {
+        // stack totals, in the wider stack's outermost material ('blend' only).
+        if (cornerMode === 'blend' && !matched.some((c) => c.w1 > 0.01 && c.w2 > 0.01)) {
           const t1 = s1.reduce((s, c) => s + c.widthM, 0);
           const t2 = s2.reduce((s, c) => s + c.widthM, 0);
           const donor = (t1 >= t2 ? s1[0] : s2[0]) ?? s1[0] ?? s2[0];
@@ -733,26 +741,26 @@ let lastDerive: {
   nodes: GraphState['nodes'];
   edges: GraphState['edges'];
   designs: Record<string, JunctionDesign> | undefined;
-  blend: boolean;
+  corners: CornerMode;
   result: NodeArtifacts;
 } | null = null;
 
 export function deriveNodeArtifactsCached(
   g: GraphState,
   designs?: Record<string, JunctionDesign>,
-  blend = true,
+  corners: CornerMode = 'blend',
 ): NodeArtifacts {
   if (
     lastDerive &&
     lastDerive.nodes === g.nodes &&
     lastDerive.edges === g.edges &&
     lastDerive.designs === designs &&
-    lastDerive.blend === blend
+    lastDerive.corners === corners
   ) {
     return lastDerive.result;
   }
-  const result = deriveNodeArtifacts(g, designs, blend);
-  lastDerive = { nodes: g.nodes, edges: g.edges, designs, blend, result };
+  const result = deriveNodeArtifacts(g, designs, corners);
+  lastDerive = { nodes: g.nodes, edges: g.edges, designs, corners, result };
   return result;
 }
 
@@ -760,7 +768,7 @@ export function deriveNodeArtifactsCached(
 export function deriveNodeArtifacts(
   g: GraphState,
   designs?: Record<string, JunctionDesign>,
-  blend = true,
+  corners: CornerMode = 'blend',
 ): NodeArtifacts {
   const byNode = new Map<string, StreetEdge[]>();
   for (const e of Object.values(g.edges)) {
@@ -781,7 +789,7 @@ export function deriveNodeArtifacts(
   const singleTrim = new Map<string, number>();
   const singleRes = new Map<string, ClusterResult | null>();
   for (const nid of junctionNodes) {
-    const res = computeJunction(g, [nid], byNode.get(nid)!, designs?.[nid], blend);
+    const res = computeJunction(g, [nid], byNode.get(nid)!, designs?.[nid], corners);
     singleRes.set(nid, res);
     res?.trims.forEach((t) => singleTrim.set(`${t.edgeId}:${t.end}`, t.trim));
   }
@@ -821,7 +829,7 @@ export function deriveNodeArtifacts(
     } else {
       const edgeSet = new Map<string, StreetEdge>();
       for (const nid of nodeIds) for (const e of byNode.get(nid)!) edgeSet.set(e.id, e);
-      res = computeJunction(g, nodeIds, [...edgeSet.values()], designs?.[[...nodeIds].sort().join('+')], blend);
+      res = computeJunction(g, nodeIds, [...edgeSet.values()], designs?.[[...nodeIds].sort().join('+')], corners);
     }
     if (res) {
       junctions.push(res.poly);

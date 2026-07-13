@@ -39,7 +39,9 @@ deploy:pages` then push (GitHub Pages, deploy-from-branch).
 | Street-tool overhaul (kind merges → MUZ/Green Buffer/Bus lane, Standard rule-of-thirds sections, mini cross-section catalog, in-place component swap, manual centerline) | **shipped** |
 | Detailing depth v1 (object properties, shape-fit selection, band snapping, c/c spacing, parking/cycle decals, LHT turn-arrow suggest) | **shipped** — full per-object toolset still open |
 | **GeoJSON export** (WGS84 FeatureCollection, layer-tagged) | **shipped** — DXF designed in `Export_Design.md` |
-| **Welded node-mesh editing** (shared nodes move all abutting generated polygons) | **shipped v1** — spec received (`assets/MESH_INTEGRATION_SPEC.md`); reconciliation + adapted phases A–F in `Mesh_Architecture.md` §0: next = global `{nodes, faces}` mesh, then insert/weld-taper/retype/absorb/split/merge, then curves & islands |
+| **Welded node-mesh editing** (shared nodes move all abutting generated polygons) | **shipped v1** — superseded by the Mesh stage below for whole-design editing |
+| **Mesh stage (v2)** — real `{nodes, faces}` mesh as pipeline step 4 (Centerlines → Street → Junction → **Mesh** → Detail): `mesh/engine.ts` global weld of generated output; ops move/insert/retype/merge/delete-absorb/split/cut-across/weld/fillet (9 engine tests); tool palette + material dropdown panel; stored + undoable + persisted; `guardMeshEdit()` confirm-reset on every graph mutation; Detail/Edit/Export + SVG/GeoJSON render mesh faces when frozen | **shipped** — open: islands-as-holes draw tool, chamfer, curves registry, lane-grid snapping (`Mesh_Architecture.md` header) |
+| Junction corner **3-mode setting** (`common` merge default · `blend` transition · `off`) through `computeJunction`/exports/3D | **shipped** |
 | CAD P2 generic `<HandleLayer>` refactor | **not started** — next structural cleanup |
 | Junctions J5–J7 (signal/priority templates, full roundabout, probe/validation) | **not started** |
 | Detailing depth (element properties, signs, signals) | **partial** |

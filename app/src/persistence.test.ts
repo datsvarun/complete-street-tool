@@ -21,6 +21,7 @@ const slice: DocumentSlice = {
   boundaries: { b1: { id: 'b1', points: [0, 0, 10, 2, 20, -1] } },
   nextBoundaryNum: 2,
   vertexOverrides: { 'band:e1:c0-band': { '0.2500': { a: 0.5, c: -1 } } },
+  mesh: null,
   busStops: [{ x: 5, y: 5, name: 'Stop A' }],
 };
 

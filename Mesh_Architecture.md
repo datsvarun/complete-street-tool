@@ -1,4 +1,23 @@
-# CST — Welded Node-Mesh System (v1 shipped · full spec adopted, phased)
+# CST — Welded Node-Mesh System (v2 SHIPPED: real `{nodes, faces}` mesh stage)
+
+> **v2 status (this supersedes the phase table below):** the true spec mesh is
+> live as a dedicated **Mesh stage** (rail position 4, between Junction and
+> Detail). `src/mesh/engine.ts` builds a global `{nodes, faces}` mesh by
+> welding the generator's output (2 cm hash); every point exists once and
+> abutting faces share node ids. Pure ops shipped + tested
+> (`src/mesh/engine.test.ts`): moveNode, insertOnSegment (all faces sharing
+> the segment), retypeFace, mergeFaces, deleteFaceAbsorb, splitFace (chord),
+> weldNodes (sliver collapse), cutAcross (street-wide v-split for bus bays),
+> filletNode (arc spliced into every face on the corner). The mesh is
+> **frozen and stored** (document/undo/autosave) — the one deliberate
+> exception to "derived, not stored" — and every graph/section-mutating store
+> action passes `guardMeshEdit()`: with manual edits present the user gets a
+> confirm dialog; proceeding resets the mesh (spec §5.7 gate). Downstream
+> stages (Detail/Edit/Export, SVG plan + GeoJSON) render mesh faces instead of
+> generated surfaces while a mesh exists. Junction corner handling is a
+> 3-mode setting (`common` default · `blend` · `off`) threaded through
+> `computeJunction`. Spec phases A–D ✅, E partial (fillet w/o registry),
+> F open (islands-as-holes, draw tool, lane-grid snapping).
 
 **Ask (user, verbatim intent):** after the centerline network is fixed and
 streets are generated, the generated geometry should behave as a node/graph

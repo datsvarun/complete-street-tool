@@ -6,6 +6,7 @@
 import type { GraphState, JunctionDesign, Patch, StreetElement, ComponentKind } from '../types';
 import { KIND_COLORS } from '../catalog';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
+import type { CornerMode } from '../graph/junctions';
 import { buildEdgeGeometry } from '../sections/transition';
 import { elementFrame } from '../detailing/elements';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
@@ -65,9 +66,9 @@ export function buildScene(
   elements: StreetElement[],
   patches: Patch[] = [],
   vertexOverrides: VertexOverrides = {},
-  blend = true,
+  corners: CornerMode = 'blend',
 ): SceneSpec {
-  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, blend);
+  const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, corners);
   const prisms: ScenePrism[] = [];
   const posts: ScenePost[] = [];
 

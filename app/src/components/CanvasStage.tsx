@@ -19,6 +19,7 @@ import type { MeshMember } from '../cad/mesh';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { EdgeTrim, JunctionPoly, NodeArtifacts } from '../graph/junctions';
+import type { Mesh, MeshFace } from '../mesh/engine';
 
 Konva.dragDistance = 3; // don't treat a pan drag as a click
 // Touch: keep hit detection alive while a finger drags, so the second finger
@@ -378,7 +379,15 @@ function NodesLayerImpl({
             removeNodeSmart(n.id);
           })}
           {...hoverCursor('move')}
-          onDragStart={() => useCst.temporal.getState().pause()}
+          onDragStart={(e) => {
+            // moving a graph node invalidates a frozen mesh — confirm first
+            if (!useCst.getState().guardMeshEdit()) {
+              e.target.stopDrag();
+              e.target.position({ x: n.x, y: n.y });
+              return;
+            }
+            useCst.temporal.getState().pause();
+          }}
           onDragMove={(e) => {
             moveNodeTo(n.id, e.target.x(), e.target.y());
             setDragSnap(snapUnderDrag(n.id, e.target.x(), e.target.y()));
@@ -469,7 +478,14 @@ function VerticesLayerImpl({
                 ev.cancelBubble = true;
                 removeVertex(e.id, i);
               })}
-              onDragStart={() => useCst.temporal.getState().pause()}
+              onDragStart={(ev) => {
+                if (!useCst.getState().guardMeshEdit()) {
+                  ev.target.stopDrag();
+                  ev.target.position({ x: e.points[i * 2], y: e.points[i * 2 + 1] });
+                  return;
+                }
+                useCst.temporal.getState().pause();
+              }}
               onDragMove={(ev) => moveVertex(e.id, i, ev.target.x(), ev.target.y())}
               onDragEnd={(ev) => {
                 useCst.temporal.getState().resume();
@@ -1190,6 +1206,11 @@ function JunctionHandlesLayer({ j, scale }: { j: JunctionPoly; scale: number }) 
           draggable
           {...hoverCursor('grab')}
           onDragStart={(ev) => {
+            if (!useCst.getState().guardMeshEdit()) {
+              ev.target.stopDrag();
+              ev.target.position({ x: c.x, y: c.y });
+              return;
+            }
             useCst.temporal.getState().pause();
             (ev.target as Konva.Shape).setAttr('dragFrom', { x: c.x, y: c.y, r: c.radiusM ?? 4 });
           }}
@@ -1226,6 +1247,11 @@ function JunctionHandlesLayer({ j, scale }: { j: JunctionPoly; scale: number }) 
           draggable
           {...hoverCursor('grab')}
           onDragStart={(ev) => {
+            if (!useCst.getState().guardMeshEdit()) {
+              ev.target.stopDrag();
+              ev.target.position({ x: a.x - r * 0.9, y: a.y - r * 0.9 });
+              return;
+            }
             useCst.temporal.getState().pause();
             (ev.target as Konva.Shape).setAttr('dragFrom', { x: ev.target.x(), y: ev.target.y(), trim: a.trim });
           }}
@@ -1251,6 +1277,183 @@ function JunctionHandlesLayer({ j, scale }: { j: JunctionPoly; scale: number }) 
 }
 
 const MIN_JUNCTION_R = 1;
+
+/** Fill colour for a mesh face: component palette + the two mesh-only fns. */
+function meshFill(fn: MeshFace['fn']): string {
+  if (fn === 'junction') return '#525e6a';
+  if (fn === 'island') return KIND_COLORS.median;
+  return KIND_COLORS[fn];
+}
+
+/** The frozen node-mesh (Mesh stage): every face is a closed polygon over
+ *  SHARED node ids — dragging one node reshapes every abutting face live
+ *  (spec §6.2 no-cracks). Clicks route through the active mesh tool; node
+ *  drags pause undo history and weld onto a coincident node on drop. */
+function MeshLayerImpl({
+  mesh,
+  interactive,
+  selectedFaceId,
+  meshPick,
+  meshTool,
+  scale,
+  viewRect,
+}: {
+  mesh: Mesh;
+  interactive: boolean;
+  selectedFaceId: string | null;
+  meshPick: string | null;
+  meshTool: string;
+  scale: number;
+  viewRect: { minX: number; minY: number; maxX: number; maxY: number } | null;
+}) {
+  // Node handles: only in select (drag), addnode/split/fillet (click) modes,
+  // culled to the viewport and hidden when zoomed far out (they'd be soup).
+  const wantNodes =
+    interactive && scale >= 1.5 && ['select', 'split', 'fillet'].includes(meshTool);
+  const nodeIds = useMemo(() => {
+    if (!wantNodes) return [];
+    const ids = Object.keys(mesh.nodes);
+    if (!viewRect || ids.length <= 300) return ids;
+    return ids.filter((id) => {
+      const p = mesh.nodes[id];
+      return p.x >= viewRect.minX && p.x <= viewRect.maxX && p.y >= viewRect.minY && p.y <= viewRect.maxY;
+    });
+  }, [wantNodes, mesh.nodes, viewRect]);
+
+  const onFacePress = (f: MeshFace) => (e: KonvaEventObject<MouseEvent>) => {
+    if (!interactive) return;
+    e.cancelBubble = true;
+    const st = useCst.getState();
+    const w = stageToWorld(e.target.getStage()!);
+    switch (st.meshTool) {
+      case 'delete':
+        st.meshDeleteFace(f.id);
+        return;
+      case 'merge':
+        st.meshMergePick(f.id);
+        return;
+      case 'cut': {
+        if (f.kind !== 'strip' || !f.edge || !w) {
+          st.selectFace(f.id);
+          return;
+        }
+        // t along the street axis: project the click on the a-row→b-row side
+        const a = mesh.nodes[f.nodes[0]];
+        const b = mesh.nodes[f.nodes[f.nodes.length - 1]];
+        const len2 = (b.x - a.x) ** 2 + (b.y - a.y) ** 2;
+        const t = len2 < 1e-9 ? 0.5 : ((w.x - a.x) * (b.x - a.x) + (w.y - a.y) * (b.y - a.y)) / len2;
+        st.meshCut(f.edge, parseInt(f.id.split(':')[2], 10), Math.min(0.9, Math.max(0.1, t)));
+        return;
+      }
+      case 'addnode': {
+        if (!w) return;
+        // nearest boundary segment of the clicked face
+        let best: { a: string; b: string; x: number; y: number; d: number } | null = null;
+        for (let i = 0; i < f.nodes.length; i++) {
+          const na = f.nodes[i];
+          const nb = f.nodes[(i + 1) % f.nodes.length];
+          const A = mesh.nodes[na];
+          const B = mesh.nodes[nb];
+          const len2 = (B.x - A.x) ** 2 + (B.y - A.y) ** 2;
+          if (len2 < 1e-9) continue;
+          const u = Math.min(0.92, Math.max(0.08,
+            ((w.x - A.x) * (B.x - A.x) + (w.y - A.y) * (B.y - A.y)) / len2));
+          const px = A.x + (B.x - A.x) * u;
+          const py = A.y + (B.y - A.y) * u;
+          const d = dist(w.x, w.y, px, py);
+          if (!best || d < best.d) best = { a: na, b: nb, x: px, y: py, d };
+        }
+        if (best) st.meshInsertNode(best.a, best.b, best.x, best.y);
+        return;
+      }
+      default:
+        st.selectFace(f.id);
+    }
+  };
+
+  return (
+    <Layer listening={interactive}>
+      {mesh.faces.map((f) => {
+        const pts: number[] = [];
+        for (const nid of f.nodes) {
+          const p = mesh.nodes[nid];
+          if (p) pts.push(p.x, p.y);
+        }
+        if (pts.length < 6) return null;
+        const selected = f.id === selectedFaceId;
+        const picked = f.id === meshPick;
+        return (
+          <Line
+            key={f.id}
+            points={pts}
+            closed
+            fill={meshFill(f.fn)}
+            stroke={selected ? '#d97a2e' : picked ? '#0a8f4b' : 'rgba(20,24,29,0.45)'}
+            strokeWidth={selected || picked ? 2.2 : 0.8}
+            strokeScaleEnabled={false}
+            perfectDrawEnabled={false}
+            {...(interactive ? pressable(onFacePress(f)) : {})}
+            {...(interactive ? hoverCursor('pointer') : {})}
+          />
+        );
+      })}
+      {nodeIds.map((nid) => {
+        const p = mesh.nodes[nid];
+        const pickedN = nid === meshPick;
+        return (
+          <Circle
+            key={nid}
+            x={p.x}
+            y={p.y}
+            radius={Math.max(3.2 / scale, 0.12)}
+            fill={pickedN ? '#0a8f4b' : '#ffffff'}
+            stroke="#14181d"
+            strokeWidth={1}
+            strokeScaleEnabled={false}
+            perfectDrawEnabled={false}
+            draggable={meshTool === 'select'}
+            {...hoverCursor(meshTool === 'select' ? 'move' : 'pointer')}
+            {...pressable((e) => {
+              const st = useCst.getState();
+              if (st.meshTool === 'split') {
+                e.cancelBubble = true;
+                st.meshSplitPick(nid);
+              } else if (st.meshTool === 'fillet') {
+                e.cancelBubble = true;
+                st.meshFillet(nid);
+              }
+            })}
+            onDragStart={() => useCst.temporal.getState().pause()}
+            onDragMove={(e) => useCst.getState().meshMoveNode(nid, e.target.x(), e.target.y(), true)}
+            onDragEnd={(e) => {
+              useCst.temporal.getState().resume();
+              const x = e.target.x();
+              const y = e.target.y();
+              const st = useCst.getState();
+              st.meshMoveNode(nid, x, y);
+              // drop onto a coincident node → weld (sliver faces collapse)
+              const tol = 8 / scale;
+              const m = st.mesh;
+              if (!m) return;
+              let hit: string | null = null;
+              let hd = tol;
+              for (const [oid, q] of Object.entries(m.nodes)) {
+                if (oid === nid) continue;
+                const d = dist(q.x, q.y, x, y);
+                if (d < hd) {
+                  hd = d;
+                  hit = oid;
+                }
+              }
+              if (hit) st.meshWeld(nid, hit);
+            }}
+          />
+        );
+      })}
+    </Layer>
+  );
+}
+const MeshLayer = memo(MeshLayerImpl);
 
 export function CanvasStage() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -1301,6 +1504,14 @@ export function CanvasStage() {
   const layers = useCst((s) => s.layers);
   const addDraftVert = useCst((s) => s.addDraftVert);
   const finishDraft = useCst((s) => s.finishDraft);
+  const mesh = useCst((s) => s.mesh);
+  const meshTool = useCst((s) => s.meshTool);
+  const selectedFaceId = useCst((s) => s.selectedFaceId);
+  const meshPick = useCst((s) => s.meshPick);
+  // Once frozen, the mesh IS the surface geometry from its stage onward —
+  // generated bands/junctions hide so edits aren't drawn over by stale shapes.
+  const meshActive =
+    !!mesh && (stage === 'mesh' || stage === 'detailing' || stage === 'edit' || stage === 'export');
 
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const nodeList = useMemo(() => Object.values(nodes), [nodes]);
@@ -1366,10 +1577,10 @@ export function CanvasStage() {
         ? deriveNodeArtifactsCached(
             { nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 },
             junctionDesigns,
-            settings.junctionBlend,
+            settings.junctionCorners,
           )
         : { junctions: [], transitions: [], trims: {} },
-    [nodes, edges, showSections, junctionDesigns, settings.junctionBlend],
+    [nodes, edges, showSections, junctionDesigns, settings.junctionCorners],
   );
   const focusedJunction =
     stage === 'junctions' && selectedJunctionKey
@@ -1646,6 +1857,7 @@ export function CanvasStage() {
         useCst.getState().selectPatch(null);
         useCst.getState().selectShape(null);
       } else if (stage === 'junctions') selectJunction(null);
+      else if (stage === 'mesh') useCst.getState().selectFace(null);
       else useCst.getState().selectEdge(null);
     }
   };
@@ -1727,6 +1939,9 @@ export function CanvasStage() {
     network: 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge',
     sections: 'Click a street to select it, then pick a section from the panel',
     junctions: 'Junction polygons are derived from the graph — pick one from the panel to zoom to it',
+    mesh: mesh
+      ? 'Every point exists once — drag a node and every abutting shape follows · pick tools from the panel'
+      : 'Generate the mesh from the panel to freeze the design into editable shapes',
     detailing: placeKind
       ? `Click a street to place a ${placeKind} · drag to move it within its band · right-click to remove`
       : 'Pick an element from the palette, or drag/right-click existing ones · Esc deselects tool',
@@ -1819,7 +2034,7 @@ export function CanvasStage() {
         onTouchEnd={onTouchEnd}
       >
         {!basemapActive && <GridLayer view={view} width={size.width} height={size.height} />}
-        {showSections && layers.junctions && (
+        {showSections && layers.junctions && !meshActive && (
           <ArtifactsLayer
             artifacts={visibleArtifacts}
             stage={stage}
@@ -1829,17 +2044,30 @@ export function CanvasStage() {
             showDetail={showDetail}
           />
         )}
-        <EdgesLayer
-          edges={visibleEdges}
-          selectedEdgeIds={selectedEdgeIds}
-          highlightEdges={highlightEdges}
-          tool={tool}
-          // roads layer off → fall back to centerline rendering
-          showSections={showSections && layers.roads}
-          trims={artifacts.trims}
-          opacity={showSections && layers.roads ? designOpacity : 1}
-          showDetail={showDetail && layers.markings}
-        />
+        {!meshActive && (
+          <EdgesLayer
+            edges={visibleEdges}
+            selectedEdgeIds={selectedEdgeIds}
+            highlightEdges={highlightEdges}
+            tool={tool}
+            // roads layer off → fall back to centerline rendering
+            showSections={showSections && layers.roads}
+            trims={artifacts.trims}
+            opacity={showSections && layers.roads ? designOpacity : 1}
+            showDetail={showDetail && layers.markings}
+          />
+        )}
+        {meshActive && mesh && layers.roads && (
+          <MeshLayer
+            mesh={mesh}
+            interactive={stage === 'mesh'}
+            selectedFaceId={selectedFaceId}
+            meshPick={meshPick}
+            meshTool={meshTool}
+            scale={view.scale}
+            viewRect={viewRect}
+          />
+        )}
         {stage === 'network' && (
           <VerticesLayer edges={visibleEdges} scale={view.scale} draggable={tool === 'direct'} />
         )}
