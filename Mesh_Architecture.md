@@ -1,4 +1,4 @@
-# CST — Welded Node-Mesh System (shipped v1)
+# CST — Welded Node-Mesh System (v1 shipped · full spec adopted, phased)
 
 **Ask (user, verbatim intent):** after the centerline network is fixed and
 streets are generated, the generated geometry should behave as a node/graph
@@ -6,11 +6,69 @@ mesh — every sub-polygon holds one function, abutting geometries share nodes,
 and moving a shared node (e.g. the footpath/carriageway intersection) reshapes
 both polygons together. Works in the Edit stage, in conjunction with Detail.
 
-**Spec status:** the user referenced a local spec
-(`D:\Code\Street_Generator\node-mesh-system\MESH_INTEGRATION_SPEC.md`) that is
-not in this repository and was not reachable from the build environment. This
-document records the implemented design so the two can be **diffed and
-reconciled** once the spec is committed/pasted. Flag divergences here.
+**Spec status: RECEIVED** — `assets/MESH_INTEGRATION_SPEC.md` (+
+`assets/mesh-core.js` reference engine and its 15-test contract) landed on the
+branch mid-build. §0 below reconciles the shipped v1 with the spec and sets
+the adapted build order. The spec is the behavioural contract; adaptations
+below exist because this repo's generator is far richer than the prototype
+tool the spec's §1.1 describes.
+
+---
+
+## 0. Spec reconciliation (read this first)
+
+**What v1 already satisfies (behaviourally):**
+- The core principle — *"moving a node reshapes every face that references
+  it"* — holds: welded drags move all abutting sub-polygons, no cracks
+  (`cad/mesh.test.ts` asserts the spec §6.2 no-cracks invariant at drag time).
+- One function per face: CST bands/junction surfaces/wedges already are that.
+- Spec §5.7's **stretch goal is v1's native behaviour**: edits are stored as
+  parametric deltas keyed to stable identities and *re-applied after every
+  regeneration* — CST never had the destructive-regeneration problem the spec
+  §5.7 gates against, because geometry re-derives continuously.
+- Spec §5.8's "outermost boundary must adapt to plot walls": v1 snaps Edit
+  drags onto traced plot boundaries.
+
+**Where v1 diverges from the spec's architecture:**
+- v1 has **no materialized `{nodes: Map, faces: []}` structure** — welds are
+  computed per selected shape and edits flow through `vertexOverrides`. The
+  spec's operations (§5.2 insert, §5.3 weld-to-taper, §5.4 retype/delete-
+  absorb, §5.5 split/merge, §5.1/5.6 curves, islands via holes) need real
+  faces with node-id loops; they are not expressible as per-shape deltas.
+- Spec node ids are semantic (`jct:B:EB:2`); v1 identities are
+  (shapeKey, perimeter-fraction) pairs. Equivalent stability class, different
+  namespace.
+
+**Key adaptation (deliberate, flag if disagreeing):** the spec's Phase A says
+"port `mesh-core.js`'s generator". That generator builds junction boxes with
+angle-aware trims — *simpler than this repo's junction engine* (tangent-arc
+fillets, corner wedges, median noses, transitions, divided carriageways),
+because the spec was written against the prototype tool (§1.1: independent
+offset bands, no junction geometry). Porting it here would regress junctions.
+**Adaptation:** keep CST's generator as the geometry source and build the
+spec's `{nodes, faces}` mesh by welding its output (v1's weld pass, promoted
+from per-shape to global). Everything downstream of §2.1 (operations, curves,
+adjacency, serialize, context menus, snapping) then follows the spec as
+written. `mesh-core.js` stays in `assets/` as the topology reference and its
+15 tests get ported against the welded mesh builder (§6 contract).
+
+**Adapted build order** (spec §7, re-based on what exists):
+| Phase | Spec scope | CST adaptation | Status |
+|---|---|---|---|
+| A | engine + render read-only mesh | global weld of derived polygons → `{nodes, faces}`; render via existing layers | **v1 ships the weld pass** (per-shape); globalize next |
+| B | drag + dirty + undo | drag ✅ (v1, via deltas); freeze/edit lifecycle + editLog to add | partial |
+| C | snapping + weld + insert node | boundary snap ✅; band-offset/station grid, weld-to-taper, insert-node to add | partial |
+| D | retype / delete-absorb / split / merge | needs real faces — after A | open |
+| E | curves/fillets registry | needs real faces — after A | open |
+| F | islands (holes) + lane guides + per-junction setback | after D/E | open |
+
+The freeze/edit lifecycle decision (spec: mesh generated once, regeneration
+gated; CST today: continuous re-derivation with migrating deltas) is the one
+open **product** question — v1's continuous model is strictly less destructive,
+but faces created by D/E operations (splits, islands) cannot migrate through
+regeneration and will need the spec's §5.7 gate once those ship.
+
+---
 
 ## 1. The design in one paragraph
 
