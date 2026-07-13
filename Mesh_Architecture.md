@@ -16,8 +16,14 @@
 > stages (Detail/Edit/Export, SVG plan + GeoJSON) render mesh faces instead of
 > generated surfaces while a mesh exists. Junction corner handling is a
 > 3-mode setting (`common` default · `blend` · `off`) threaded through
-> `computeJunction`. Spec phases A–D ✅, E partial (fillet w/o registry),
-> F open (islands-as-holes, draw tool, lane-grid snapping).
+> `computeJunction`. Spec phases A–D ✅, E ✅ as **three-point arcs**: curved
+> runs from the generator collapse to start/mid/end nodes (mid carries
+> `arc: true`); faces render true circumcircle arcs through flagged mids
+> (canvas sceneFunc, `facePoints()` flattens for SVG/GeoJSON export), and
+> `filletNode` emits a 3-node arc. F open (islands-as-holes, draw tool,
+> lane-grid snapping). Common corner mode keeps the FULL matched list for
+> lateral offsets — non-common entries pave as junction cover (`apronCovers`)
+> so common elements (footpath↔footpath) meet at their true positions.
 
 **Ask (user, verbatim intent):** after the centerline network is fixed and
 streets are generated, the generated geometry should behave as a node/graph

@@ -10,6 +10,7 @@ import type { CornerMode } from '../graph/junctions';
 import { buildEdgeGeometry } from '../sections/transition';
 import { elementFrame } from '../detailing/elements';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
+import { facePoints } from '../mesh/engine';
 import type { Mesh } from '../mesh/engine';
 import type { VertexOverrides } from '../cad/vertexOverrides';
 
@@ -54,11 +55,7 @@ export function buildGeoJson(
   // per face, carrying its function and id.
   if (mesh) {
     for (const f of mesh.faces) {
-      const pts: number[] = [];
-      for (const nid of f.nodes) {
-        const p = mesh.nodes[nid];
-        if (p) pts.push(p.x, p.y);
-      }
+      const pts = facePoints(mesh, f);
       if (pts.length < 6) continue;
       features.push({
         type: 'Feature',

@@ -10,6 +10,7 @@ import { bandDecals, elementGraphics, laneDividers } from '../detailing/elements
 import { graphBounds } from '../graph/ops';
 import { applyShapeOverrides } from '../cad/vertexOverrides';
 import type { VertexOverrides } from '../cad/vertexOverrides';
+import { facePoints } from '../mesh/engine';
 import type { Mesh, MeshFace } from '../mesh/engine';
 
 export function esc(s: string): string {
@@ -51,11 +52,7 @@ export function planContent(
       fn === 'junction' ? '#525e6a' : fn === 'island' ? KIND_COLORS.median : KIND_COLORS[fn];
     const sorted = [...mesh.faces].sort((a, b) => (a.fn === 'junction' ? -1 : 0) - (b.fn === 'junction' ? -1 : 0));
     for (const f of sorted) {
-      const pts: number[] = [];
-      for (const nid of f.nodes) {
-        const p = mesh.nodes[nid];
-        if (p) pts.push(p.x, p.y);
-      }
+      const pts = facePoints(mesh, f);
       if (pts.length >= 6) out.push(poly(pts, faceFill(f.fn), 'rgba(30,35,40,0.35)', 0.12));
     }
   }

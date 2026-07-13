@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Stage, Layer, Line, Circle, Ring, Rect, Arrow, Group } from 'react-konva';
+import { Stage, Layer, Line, Circle, Ring, Rect, Arrow, Group, Shape } from 'react-konva';
 import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
@@ -9,6 +9,7 @@ import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
 import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts, pointInPolygon } from '../geometry/polyline';
 import { BasemapFab, ScaleBar, CompassRose, LayerRail } from './FloatingUI';
+import { PropertiesSidebar } from './PropertiesSidebar';
 import { nodeClassOf } from '../types';
 import type { Boundary, GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
 import { bandDecals, elementGraphics, laneDividers } from '../detailing/elements';
@@ -19,6 +20,7 @@ import type { MeshMember } from '../cad/mesh';
 import { degree } from '../graph/ops';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { EdgeTrim, JunctionPoly, NodeArtifacts } from '../graph/junctions';
+import { circleFrom3 } from '../mesh/engine';
 import type { Mesh, MeshFace } from '../mesh/engine';
 
 Konva.dragDistance = 3; // don't treat a pan drag as a click
@@ -1285,6 +1287,43 @@ function meshFill(fn: MeshFace['fn']): string {
   return KIND_COLORS[fn];
 }
 
+/** Trace a face outline drawing TRUE circular arcs through arc-mid nodes
+ *  (three-point arcs — the mesh stores curves as start/mid/end, not samples). */
+function traceFace(ctx: Konva.Context, mesh: Mesh, f: MeshFace): boolean {
+  const ids = f.nodes.filter((id) => mesh.nodes[id]);
+  const n = ids.length;
+  if (n < 3) return false;
+  const r0 = Math.max(ids.findIndex((id) => !mesh.nodes[id].arc), 0);
+  const P = (i: number) => mesh.nodes[ids[(i + r0) % n]];
+  ctx.beginPath();
+  ctx.moveTo(P(0).x, P(0).y);
+  let i = 1;
+  while (i <= n) {
+    const m = P(i % n);
+    if (m.arc && i < n) {
+      const A = P(i - 1);
+      const B = P(i + 1);
+      const c = circleFrom3(A.x, A.y, m.x, m.y, B.x, B.y);
+      if (c) {
+        const TAU = 2 * Math.PI;
+        const a0 = Math.atan2(A.y - c.y, A.x - c.x);
+        const d1 = (((Math.atan2(B.y - c.y, B.x - c.x) - a0) % TAU) + TAU) % TAU;
+        const dm = (((Math.atan2(m.y - c.y, m.x - c.x) - a0) % TAU) + TAU) % TAU;
+        ctx.arc(c.x, c.y, c.r, a0, a0 + (dm <= d1 ? d1 : d1 - TAU), dm > d1);
+      } else {
+        ctx.lineTo(m.x, m.y);
+        ctx.lineTo(B.x, B.y);
+      }
+      i += 2;
+    } else {
+      ctx.lineTo(m.x, m.y);
+      i++;
+    }
+  }
+  ctx.closePath();
+  return true;
+}
+
 /** The frozen node-mesh (Mesh stage): every face is a closed polygon over
  *  SHARED node ids — dragging one node reshapes every abutting face live
  *  (spec §6.2 no-cracks). Clicks route through the active mesh tool; node
@@ -1308,16 +1347,20 @@ function MeshLayerImpl({
 }) {
   // Node handles: only in select (drag), addnode/split/fillet (click) modes,
   // culled to the viewport and hidden when zoomed far out (they'd be soup).
-  const wantNodes =
-    interactive && scale >= 1.5 && ['select', 'split', 'fillet'].includes(meshTool);
+  const wantNodes = interactive && ['select', 'split', 'fillet'].includes(meshTool);
   const nodeIds = useMemo(() => {
     if (!wantNodes) return [];
     const ids = Object.keys(mesh.nodes);
-    if (!viewRect || ids.length <= 300) return ids;
-    return ids.filter((id) => {
-      const p = mesh.nodes[id];
-      return p.x >= viewRect.minX && p.x <= viewRect.maxX && p.y >= viewRect.minY && p.y <= viewRect.maxY;
-    });
+    const vis =
+      !viewRect || ids.length <= 300
+        ? ids
+        : ids.filter((id) => {
+            const p = mesh.nodes[id];
+            return p.x >= viewRect.minX && p.x <= viewRect.maxX && p.y >= viewRect.minY && p.y <= viewRect.maxY;
+          });
+    // handle soup: zoomed out over thousands of nodes, draw none (count-based,
+    // not scale-based — a hard zoom threshold made handles pop in and out)
+    return vis.length > 1500 ? [] : vis;
   }, [wantNodes, mesh.nodes, viewRect]);
 
   const onFacePress = (f: MeshFace) => (e: KonvaEventObject<MouseEvent>) => {
@@ -1374,19 +1417,15 @@ function MeshLayerImpl({
   return (
     <Layer listening={interactive}>
       {mesh.faces.map((f) => {
-        const pts: number[] = [];
-        for (const nid of f.nodes) {
-          const p = mesh.nodes[nid];
-          if (p) pts.push(p.x, p.y);
-        }
-        if (pts.length < 6) return null;
+        if (f.nodes.filter((nid) => mesh.nodes[nid]).length < 3) return null;
         const selected = f.id === selectedFaceId;
         const picked = f.id === meshPick;
         return (
-          <Line
+          <Shape
             key={f.id}
-            points={pts}
-            closed
+            sceneFunc={(ctx, shape) => {
+              if (traceFace(ctx, mesh, f)) ctx.fillStrokeShape(shape);
+            }}
             fill={meshFill(f.fn)}
             stroke={selected ? '#d97a2e' : picked ? '#0a8f4b' : 'rgba(20,24,29,0.45)'}
             strokeWidth={selected || picked ? 2.2 : 0.8}
@@ -1524,19 +1563,19 @@ export function CanvasStage() {
   // quarter-viewport pan steps / half-octave zoom steps, so the culled arrays
   // keep their identity while panning — otherwise every drag frame would
   // reconcile every Konva node. The pad covers the quantization slack.
-  const qw = size.width * 0.25 || 1;
-  const qh = size.height * 0.25 || 1;
-  const qx = Math.round(view.x / qw) * qw;
-  const qy = Math.round(view.y / qh) * qh;
-  const qs = Math.pow(2, Math.floor(Math.log2(view.scale) * 2) / 2); // ≤ scale → superset viewport
+  const qs = Math.pow(2, Math.floor(Math.log2(view.scale) * 2) / 2); // ≤ scale → superset size
+  // Quantize the WORLD-space top-left (not the screen offset): converting a
+  // screen-quantized offset with qs ≠ scale shifts the rect by a fraction of
+  // the distance to the world origin — shapes visibly vanished mid-octave.
+  const qStep = (Math.max(size.width, size.height) / qs) * 0.25 || 1;
+  const qx = Math.round(-view.x / view.scale / qStep) * qStep;
+  const qy = Math.round(-view.y / view.scale / qStep) * qStep;
   const viewRect = useMemo(() => {
     if (size.width === 0) return null;
-    const x0 = -qx / qs;
-    const y0 = -qy / qs;
     const w = size.width / qs;
     const h = size.height / qs;
-    const pad = Math.max(w, h) * CULL_PAD;
-    return { minX: x0 - pad, minY: y0 - pad, maxX: x0 + w + pad, maxY: y0 + h + pad };
+    const pad = Math.max(w, h) * CULL_PAD; // covers the ≤ qStep/2 quantization slack
+    return { minX: qx - pad, minY: qy - pad, maxX: qx + w + pad, maxY: qy + h + pad };
   }, [qx, qy, qs, size]);
   const visibleEdges = useMemo(() => {
     if (!viewRect || edgeList.length <= CULL_MIN_EDGES) return edgeList;
@@ -2233,6 +2272,7 @@ export function CanvasStage() {
       </div>
       <CompassRose />
       <LayerRail />
+      <PropertiesSidebar />
       <div className="overlay hint-pill">{hint}</div>
       <div className="overlay coords-pill" ref={coordsRef} />
     </div>

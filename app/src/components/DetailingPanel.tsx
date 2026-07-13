@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useCst } from '../store';
 import type { ElementKind } from '../types';
-import { ELEMENT_LABELS, ELEMENT_PROPS, propOf } from '../detailing/elements';
+import { ELEMENT_LABELS } from '../detailing/elements';
 
 // Palette groups mirror the user's brief: furniture / plantation, markings,
 // crossings & entrances. Turn arrows carry a direction variant.
@@ -50,7 +50,6 @@ export function DetailingPanel() {
   const selectEdge = useCst((s) => s.selectEdge);
   const setEdgeLanes = useCst((s) => s.setEdgeLanes);
   const selectedElementId = useCst((s) => s.selectedElementId);
-  const setElementProp = useCst((s) => s.setElementProp);
   const [spacingText, setSpacingText] = useState('');
 
   const anySection = Object.values(edges).some((e) => e.section);
@@ -99,57 +98,11 @@ export function DetailingPanel() {
         </div>
       ))}
 
-      {(() => {
-        const selEl = selectedElementId ? elements[selectedElementId] : null;
-        const fields = selEl ? ELEMENT_PROPS[selEl.kind] ?? [] : [];
-        if (!selEl) return null;
-        return (
-          <>
-            <h3>Object properties</h3>
-            <p className="muted small">
-              <strong>#{selEl.id}</strong> · {ELEMENT_LABELS[selEl.kind]}
-              {selEl.variant ? ` (${selEl.variant})` : ''} · {selEl.edgeId} @{' '}
-              {selEl.stationM.toFixed(1)} m{selEl.placedBy === 'suggest' ? ' · suggested' : ''}
-            </p>
-            {fields.length === 0 && <p className="muted small">No editable properties for this type.</p>}
-            {fields.map((f) => (
-              <label key={f.key} className="prop-row small">
-                <span>{f.label}</span>
-                {f.type === 'select' ? (
-                  <select
-                    value={propOf(selEl, f.key, f.default as string)}
-                    onChange={(e) => setElementProp(selEl.id, f.key, e.target.value)}
-                  >
-                    {f.options!.map((o) => (
-                      <option key={o} value={o}>
-                        {o}
-                      </option>
-                    ))}
-                  </select>
-                ) : f.type === 'number' ? (
-                  <input
-                    type="number"
-                    step={0.1}
-                    min={f.min}
-                    max={f.max}
-                    value={propOf(selEl, f.key, f.default as number)}
-                    onChange={(e) => {
-                      const v = parseFloat(e.target.value);
-                      if (Number.isFinite(v)) setElementProp(selEl.id, f.key, v);
-                    }}
-                  />
-                ) : (
-                  <input
-                    type="checkbox"
-                    checked={propOf(selEl, f.key, f.default as boolean)}
-                    onChange={(e) => setElementProp(selEl.id, f.key, e.target.checked)}
-                  />
-                )}
-              </label>
-            ))}
-          </>
-        );
-      })()}
+      {selectedElementId && elements[selectedElementId] && (
+        <p className="muted small">
+          Selected object's properties are in the right sidebar.
+        </p>
+      )}
 
       <h3>Auto-suggest</h3>
       <p className="muted small">

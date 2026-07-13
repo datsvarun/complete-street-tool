@@ -36,6 +36,7 @@ import {
   sampleTransitionBands,
   transitionLength,
 } from '../sections/transition';
+import type { MatchedComponent } from '../sections/transition';
 import { DRIVABLE_KINDS } from '../catalog';
 
 const FALLBACK_WIDTH_M = 7; // approaches without a section still shape the junction
@@ -466,6 +467,7 @@ function computeJunction(
   // Surface ring: mouth caps at curb offsets + curb segments + fillet arcs.
   const ring: number[] = [];
   const wedges: RibbonBand[] = [];
+  const apronCovers: number[][] = []; // common-mode spacers paved as surface
   approaches.forEach((a, i) => {
     const next = approaches[(i + 1) % k];
     const corner = corners[i];
@@ -518,10 +520,18 @@ function computeJunction(
           path = rev;
         }
         let matched = matchComponents(s1, s2);
+        // indices (into matched, outermost-first) rendered as junction cover
+        let spacerIdx: Set<number> | null = null;
         if (cornerMode === 'common') {
-          // Only common elements sweep the corner at their own widths — the
-          // drop/introduce (w=0 taper) entries are exactly the transitions.
-          matched = matched.filter((c) => c.w1 > 0.01 && c.w2 > 0.01);
+          // Only common elements sweep the corner. The uncommon entries must
+          // still occupy their width (bands anchor at the curb and stack
+          // outward — dropping them would pull the footpath onto the curb),
+          // so entries INSIDE the outermost common one pave as junction
+          // surface; entries outside it vanish (nothing to bridge to).
+          const isCommon = (c: MatchedComponent) => c.w1 > 0.01 && c.w2 > 0.01;
+          const first = matched.findIndex(isCommon);
+          matched = first < 0 ? [] : matched.slice(first);
+          spacerIdx = new Set(matched.map((c, mi) => (isCommon(c) ? -1 : mi)).filter((mi) => mi >= 0));
         }
         // Wholly unmatched stacks (footpath meeting a green verge): drop/
         // introduce tapers would sweep slivers across both mouths. Pave the
@@ -533,13 +543,12 @@ function computeJunction(
           const donor = (t1 >= t2 ? s1[0] : s2[0]) ?? s1[0] ?? s2[0];
           matched = [{ element: donor.element, kind: donor.kind, w1: t1, w2: t2 }];
         }
-        wedges.push(
-          ...sampleTransitionBands(path, matched, 0, pathLen, `w${i}`, 1, 1).map((b) => ({
-            ...b,
-            key: `j-${b.key}`,
-            polygon: unfoldBand(b.polygon),
-          })),
-        );
+        for (const b of sampleTransitionBands(path, matched, 0, pathLen, `w${i}`, 1, 1)) {
+          const mi = parseInt(b.key.split('-')[1].slice(1), 10); // `w{i}-t{mi}-…`
+          const polygon = unfoldBand(b.polygon);
+          if (spacerIdx?.has(mi)) apronCovers.push(polygon);
+          else wedges.push({ ...b, key: `j-${b.key}`, polygon });
+        }
       }
     }
   });
@@ -574,12 +583,14 @@ function computeJunction(
     });
   });
 
-  const coverBands = internal.map((e) => {
-    const w = e.section
-      ? e.section.components.reduce((s, c) => s + c.widthM, 0)
-      : FALLBACK_WIDTH_M;
-    return ribbonBand(toPts(e.points), w / 2, -w / 2);
-  });
+  const coverBands = internal
+    .map((e) => {
+      const w = e.section
+        ? e.section.components.reduce((s, c) => s + c.widthM, 0)
+        : FALLBACK_WIDTH_M;
+      return ribbonBand(toPts(e.points), w / 2, -w / 2);
+    })
+    .concat(apronCovers);
 
   // Handle metadata: corner dots on arc midpoints, approach squares at mouths.
   const cornerInfos: CornerInfo[] = corners.map((c, i) => {

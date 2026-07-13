@@ -28,8 +28,16 @@ export interface MeshFace {
   edge?: string; // owning edge for strips (snapping/cut context)
 }
 
+export interface MeshNode {
+  x: number;
+  y: number;
+  /** Mid-point of a three-point circular arc: the boundary from the previous
+   *  to the next node of a face renders as the circle through all three. */
+  arc?: boolean;
+}
+
 export interface Mesh {
-  nodes: Record<string, { x: number; y: number }>;
+  nodes: Record<string, MeshNode>;
   faces: MeshFace[];
   editLog: string[];
   nextNum: number; // inserted-node counter
@@ -37,6 +45,118 @@ export interface Mesh {
 
 const WELD = 0.02;
 const key = (x: number, y: number) => `${Math.round(x / WELD)}:${Math.round(y / WELD)}`;
+
+/** Collapse runs of short, consistently-turning sampled segments into
+ *  three-point arcs (start · flagged mid · end) — the generator emits curves
+ *  as dense polylines; the mesh should hold editable arcs, not node soup.
+ *  Deterministic and orientation-independent (mid picked by arc length), so
+ *  the two faces sharing a curve collapse it to the SAME three nodes. */
+function arcify(poly: number[]): Array<{ x: number; y: number; arc?: boolean }> {
+  const pts: Array<{ x: number; y: number; arc?: boolean }> = [];
+  for (let i = 0; i + 1 < poly.length; i += 2) pts.push({ x: poly[i], y: poly[i + 1] });
+  const n = pts.length;
+  if (n < 5) return pts;
+  const seg = (i: number) => ({ x: pts[i + 1].x - pts[i].x, y: pts[i + 1].y - pts[i].y });
+  const turn: number[] = []; // signed turn at interior vertex i (rad)
+  for (let i = 1; i < n - 1; i++) {
+    const a = seg(i - 1);
+    const b = seg(i);
+    turn[i] = Math.atan2(a.x * b.y - a.y * b.x, a.x * b.x + a.y * b.y);
+  }
+  const curvy = (i: number) => {
+    const t = turn[i];
+    if (t === undefined || Math.abs(t) < 0.015 || Math.abs(t) > 0.5) return 0;
+    const l1 = Math.hypot(seg(i - 1).x, seg(i - 1).y);
+    const l2 = Math.hypot(seg(i).x, seg(i).y);
+    return l1 < 4 && l2 < 4 ? Math.sign(t) : 0;
+  };
+  const out: typeof pts = [pts[0]];
+  let i = 1;
+  while (i < n - 1) {
+    const s = curvy(i);
+    let j = i;
+    while (j + 1 < n - 1 && curvy(j + 1) === s && s !== 0) j++;
+    if (s !== 0 && j - i >= 2) {
+      // arc-length midpoint of the run (ties broken by coordinates → both
+      // traversal directions pick the same physical vertex)
+      let len = 0;
+      const cum = [0];
+      for (let m = i; m < j; m++) {
+        len += Math.hypot(pts[m + 1].x - pts[m].x, pts[m + 1].y - pts[m].y);
+        cum.push(len);
+      }
+      let best = i;
+      let bd = Infinity;
+      for (let m = i; m <= j; m++) {
+        const d = Math.abs(cum[m - i] - len / 2);
+        const p = pts[m];
+        const better = d < bd - 1e-9 || (Math.abs(d - bd) < 1e-9 && (p.x < pts[best].x || (p.x === pts[best].x && p.y < pts[best].y)));
+        if (better) {
+          bd = d;
+          best = m;
+        }
+      }
+      out.push({ ...pts[best], arc: true });
+      i = j + 1;
+    } else {
+      out.push(pts[i]);
+      i++;
+    }
+  }
+  out.push(pts[n - 1]);
+  return out;
+}
+
+/** Circumcircle through three points, or null when (near-)collinear. */
+export function circleFrom3(
+  ax: number, ay: number, bx: number, by: number, cx: number, cy: number,
+): { x: number; y: number; r: number } | null {
+  const d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+  if (Math.abs(d) < 1e-6) return null;
+  const a2 = ax * ax + ay * ay;
+  const b2 = bx * bx + by * by;
+  const c2 = cx * cx + cy * cy;
+  const x = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
+  const y = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
+  return { x, y, r: Math.hypot(ax - x, ay - y) };
+}
+
+/** Face outline as flat coords with arc mids expanded into sampled circular
+ *  arcs — for export/plotting; the canvas draws true arcs itself. */
+export function facePoints(mesh: Mesh, f: MeshFace, arcSegs = 10): number[] {
+  const ids = f.nodes.filter((id) => mesh.nodes[id]);
+  const n = ids.length;
+  const out: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const cur = mesh.nodes[ids[i]];
+    if (!cur.arc) {
+      out.push(cur.x, cur.y);
+      continue;
+    }
+    const A = mesh.nodes[ids[(i - 1 + n) % n]];
+    const B = mesh.nodes[ids[(i + 1) % n]];
+    const c = circleFrom3(A.x, A.y, cur.x, cur.y, B.x, B.y);
+    if (!c) {
+      out.push(cur.x, cur.y);
+      continue;
+    }
+    const a0 = Math.atan2(A.y - c.y, A.x - c.x);
+    const am = Math.atan2(cur.y - c.y, cur.x - c.x);
+    const a1 = Math.atan2(B.y - c.y, B.x - c.x);
+    // sweep from a0 to a1 passing through am
+    let d1 = a1 - a0;
+    let dm = am - a0;
+    const TAU = 2 * Math.PI;
+    d1 = ((d1 % TAU) + TAU) % TAU;
+    dm = ((dm % TAU) + TAU) % TAU;
+    const sweep = dm <= d1 ? d1 : d1 - TAU; // ccw if mid inside ccw span
+    for (let s = 1; s < arcSegs; s++) {
+      const a = a0 + (sweep * s) / arcSegs;
+      out.push(c.x + c.r * Math.cos(a), c.y + c.r * Math.sin(a));
+    }
+  }
+  return out;
+}
 
 /** Freeze the whole derived design into one shared-node mesh. */
 export function buildMesh(
@@ -49,12 +169,12 @@ export function buildMesh(
   const faces: MeshFace[] = [];
   const byPos = new Map<string, string>(); // weld hash → canonical node id
 
-  const nodeAt = (id: string, x: number, y: number): string => {
+  const nodeAt = (id: string, x: number, y: number, arc?: boolean): string => {
     const k = key(x, y);
     const hit = byPos.get(k);
     if (hit) return hit;
     byPos.set(k, id);
-    nodes[id] = { x, y };
+    nodes[id] = arc ? { x, y, arc } : { x, y };
     return id;
   };
 
@@ -94,9 +214,9 @@ export function buildMesh(
 
   const addPoly = (id: string, fn: MeshFn, kind: MeshFace['kind'], poly: number[]) => {
     const ids: string[] = [];
-    for (let i = 0; i + 1 < poly.length; i += 2) {
-      ids.push(nodeAt(`${id}:${i / 2}`, poly[i], poly[i + 1]));
-    }
+    arcify(poly).forEach((p, i) => {
+      ids.push(nodeAt(`${id}:${i}`, p.x, p.y, p.arc));
+    });
     // drop consecutive duplicates from welding
     const loop = ids.filter((n, i) => n !== ids[(i + 1) % ids.length]);
     if (new Set(loop).size >= 3) faces.push({ id, fn, kind, nodes: loop });
@@ -376,17 +496,17 @@ export function filletNode(mesh: Mesh, nid: string, r: number): Mesh | null {
   const tan = Math.min(r / Math.tan(ang / 2), l1 * 0.45, l2 * 0.45);
   const t1 = { x: P.x + (v1.x / l1) * tan, y: P.y + (v1.y / l1) * tan };
   const t2 = { x: P.x + (v2.x / l2) * tan, y: P.y + (v2.y / l2) * tan };
-  const N = 5;
   const nodes = { ...mesh.nodes };
   let num = mesh.nextNum;
+  // three-point arc: tangent points + flagged mid (bezier apex at u = 0.5)
   const arcIds: string[] = [];
-  for (let s = 0; s <= N; s++) {
-    const u = s / N;
-    // quadratic bezier t1→P→t2 approximates the fillet arc
-    const x = (1 - u) * (1 - u) * t1.x + 2 * (1 - u) * u * P.x + u * u * t2.x;
-    const y = (1 - u) * (1 - u) * t1.y + 2 * (1 - u) * u * P.y + u * u * t2.y;
+  for (const [px, py, arc] of [
+    [t1.x, t1.y, false],
+    [0.25 * t1.x + 0.5 * P.x + 0.25 * t2.x, 0.25 * t1.y + 0.5 * P.y + 0.25 * t2.y, true],
+    [t2.x, t2.y, false],
+  ] as Array<[number, number, boolean]>) {
     const id = `ins:${num++}`;
-    nodes[id] = { x, y };
+    nodes[id] = arc ? { x: px, y: py, arc } : { x: px, y: py };
     arcIds.push(id);
   }
   let used = false;

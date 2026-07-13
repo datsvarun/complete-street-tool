@@ -4,7 +4,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { LAYER_LABELS, useCst } from '../store';
 import type { Basemap, LayerKey } from '../store';
-import type { Stage, Tool } from '../types';
+import { KIND_LABELS } from '../catalog';
+import type { MeshFn } from '../mesh/engine';
+import type { ComponentKind, Stage, Tool } from '../types';
 
 const STAGES: Array<{ id: Stage; label: string; icon: string; hint: string }> = [
   { id: 'network', label: 'Network', icon: '◈', hint: 'Draw & edit the street network (1)' },
@@ -65,6 +67,86 @@ const TOOL_GROUPS: ToolDef[][] = [
   ],
 ];
 
+type MeshTool = ReturnType<typeof useCst.getState>['meshTool'];
+
+const MESH_TOOLS: Array<{ id: MeshTool; icon: string; label: string; hint: string }> = [
+  { id: 'select', icon: '➤', label: 'Select', hint: 'Click a face to select it · drag nodes to reshape (shared nodes move every abutting shape)' },
+  { id: 'addnode', icon: '+', label: 'Node', hint: 'Click on any shape edge to add a node there (added to every shape sharing that edge)' },
+  { id: 'split', icon: '✂', label: 'Split', hint: 'Click two nodes of one face — it splits along the chord' },
+  { id: 'cut', icon: '⊟', label: 'Cut', hint: 'Click a street strip — every band splits at that station (bus bays, parking bays)' },
+  { id: 'merge', icon: '⊞', label: 'Merge', hint: 'Click two abutting faces to merge them' },
+  { id: 'fillet', icon: '◠', label: 'Fillet', hint: 'Click a corner node — replaced by a three-point arc in every shape using it' },
+  { id: 'delete', icon: '⌫', label: 'Delete', hint: 'Click a face — absorbed into its drivable neighbour' },
+];
+
+const MESH_MATERIALS: MeshFn[] = [
+  'carriageway', 'footpath', 'cycle', 'parking', 'median', 'muz', 'buffer',
+  'tree', 'livability', 'busstop', 'service', 'island', 'junction',
+];
+
+const meshFnLabel = (m: MeshFn) =>
+  m === 'junction' ? 'Junction surface' : m === 'island' ? 'Island / refuge' : KIND_LABELS[m as ComponentKind] ?? m;
+
+/** Mesh stage top bar: the full mesh toolset + the material dropdown for the
+ *  selected shape (retype-in-place — parking bay → footpath, etc.). */
+function MeshToolbar() {
+  const mesh = useCst((s) => s.mesh);
+  const meshTool = useCst((s) => s.meshTool);
+  const setMeshTool = useCst((s) => s.setMeshTool);
+  const selectedFaceId = useCst((s) => s.selectedFaceId);
+  const meshRetypeSelected = useCst((s) => s.meshRetypeSelected);
+  const filletR = useCst((s) => s.filletR);
+  const setFilletR = useCst((s) => s.setFilletR);
+  const face = mesh?.faces.find((f) => f.id === selectedFaceId) ?? null;
+  return (
+    <div className="top-toolbar">
+      <div className="tt-group">
+        {MESH_TOOLS.map((t) => (
+          <button
+            key={t.id}
+            className={meshTool === t.id ? 'tt-btn active' : 'tt-btn'}
+            title={t.hint}
+            disabled={!mesh}
+            onClick={() => setMeshTool(t.id)}
+          >
+            <span className="tt-icon">{t.icon}</span>
+            <span className="tt-label">{t.label}</span>
+          </button>
+        ))}
+      </div>
+      <div className="tt-group tt-fields">
+        {meshTool === 'fillet' && (
+          <label className="tt-field" title="Fillet radius (m)">
+            R
+            <input
+              type="number"
+              step={0.5}
+              min={0.5}
+              max={20}
+              value={filletR}
+              onChange={(e) => setFilletR(parseFloat(e.target.value) || 3)}
+            />
+          </label>
+        )}
+        <select
+          className="tt-select"
+          title={face ? 'Change the selected shape’s material' : 'Select a shape to set its material'}
+          disabled={!face}
+          value={face?.fn ?? ''}
+          onChange={(e) => meshRetypeSelected(e.target.value as MeshFn)}
+        >
+          {!face && <option value="">Material…</option>}
+          {MESH_MATERIALS.map((m) => (
+            <option key={m} value={m}>
+              {meshFnLabel(m)}
+            </option>
+          ))}
+        </select>
+      </div>
+    </div>
+  );
+}
+
 /** Standard tools live in the top bar; stage panels keep only their own
  *  domain-specific choices. Stage-inapplicable tools disable, not hide. */
 export function TopToolbar() {
@@ -72,6 +154,7 @@ export function TopToolbar() {
   const tool = useCst((s) => s.tool);
   const setTool = useCst((s) => s.setTool);
   if (stage === 'export') return <div className="top-toolbar" />;
+  if (stage === 'mesh') return <MeshToolbar />;
   return (
     <div className="top-toolbar">
       {TOOL_GROUPS.map((group, gi) => (
