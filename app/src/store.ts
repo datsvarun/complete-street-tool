@@ -52,7 +52,6 @@ interface CstState extends GraphState {
   simplifyAll: (tolM: number) => void;
   cleanNetwork: () => void;
   importOsm: (lat: number, lon: number, radiusM: number) => Promise<void>;
-  loadSample: () => Promise<void>;
   scanDualCarriageways: () => void;
   applyDcMerge: (c: DcCandidate) => void;
   setHighlight: (ids: string[]) => void;
@@ -206,22 +205,6 @@ export const useCst = create<CstState>()(
         } catch (err) {
           set({ importBusy: false, statusMsg: `Import failed: ${(err as Error).message}` });
         }
-      },
-
-      loadSample: async () => {
-        set({ importBusy: true, statusMsg: 'Loading Pune sample…' });
-        const data = (await import('./data/pune-sample.json')).default as unknown as Parameters<typeof parseOsm>[0];
-        const g = parseOsm(data);
-        const cleaned = runStandardPipeline(g);
-        set({
-          ...cleaned.g,
-          importBusy: false,
-          selectedEdgeId: null,
-          dcCandidates: null,
-          highlightEdges: [],
-          pendingFit: graphBounds(cleaned.g),
-          statusMsg: `Sample: ${Object.keys(cleaned.g.edges).length} edges / ${Object.keys(cleaned.g.nodes).length} nodes (${cleaned.summary})`,
-        });
       },
 
       scanDualCarriageways: () =>
