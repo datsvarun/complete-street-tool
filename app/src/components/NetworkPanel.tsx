@@ -17,7 +17,6 @@ export function NetworkPanel() {
   const simplifyAll = useCst((s) => s.simplifyAll);
   const cleanNetwork = useCst((s) => s.cleanNetwork);
   const importOsm = useCst((s) => s.importOsm);
-  const loadSample = useCst((s) => s.loadSample);
   const scanDualCarriageways = useCst((s) => s.scanDualCarriageways);
   const applyDcMerge = useCst((s) => s.applyDcMerge);
   const setHighlight = useCst((s) => s.setHighlight);
@@ -67,9 +66,6 @@ export function NetworkPanel() {
           onClick={() => importOsm(parseFloat(lat), parseFloat(lon), parseFloat(radius))}
         >
           Import from OSM
-        </button>
-        <button disabled={importBusy} onClick={() => loadSample()}>
-          Pune sample
         </button>
       </div>
       <p className="muted small">Replaces the current network. Data © OpenStreetMap contributors.</p>
