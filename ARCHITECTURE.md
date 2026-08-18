@@ -10,6 +10,8 @@ top-to-bottom once; afterwards each module should be modifiable in isolation.
   (J1–J4 shipped, J5–J7 open).
 - `End_to_End_Design.md` — full-app ideation (persistence, start flow,
   detailing scope); build-order suggestions, not commitments.
+- `Backend_Architecture.md` — proposed zero-cost backend (auth, accounts,
+  cloud saves, sharing); design proposal, nothing built yet.
 - `Case_Study.md` — algorithm ports (osm2streets / Streetmix / LaneMaker)
   with pseudocode. Reference only, never a task list.
 - `CLAUDE.md` — working rules. App code in `/app`; docs at root; **all
