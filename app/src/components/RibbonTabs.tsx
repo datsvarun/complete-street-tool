@@ -905,6 +905,13 @@ function StyleGroup() {
                 {KIND_LABELS[k]}
                 {shared(k) && <span className="muted small"> ({k})</span>}
               </span>
+              <input
+                type="color"
+                value={kindStyles[k].ink}
+                disabled={kindStyles[k].hatch === 'none'}
+                title={`${KIND_LABELS[k]} hatch line colour`}
+                onChange={(e) => setKindStyle(k, { ink: e.target.value })}
+              />
               <select
                 value={kindStyles[k].hatch}
                 title={`${KIND_LABELS[k]} hatch`}

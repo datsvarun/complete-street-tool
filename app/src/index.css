@@ -1627,10 +1627,15 @@ button.chip.active {
 
 .style-row {
   display: grid;
-  grid-template-columns: 34px 1fr 110px;
+  grid-template-columns: 34px 1fr 34px 150px;
   align-items: center;
   gap: 8px;
   font-size: 13px;
+}
+
+.style-row input[type='color']:disabled {
+  opacity: 0.3;
+  cursor: default;
 }
 
 .style-row input[type='color'] {

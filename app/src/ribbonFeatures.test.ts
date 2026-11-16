@@ -47,15 +47,18 @@ describe('drawing style', () => {
   it('defaults to the pastel preset with hatches', () => {
     expect(useCst.getState().kindStyles).toEqual(STYLE_PRESETS.pastel);
     expect(KIND_COLORS.footpath).toBe(STYLE_PRESETS.pastel.footpath.color);
-    expect(KIND_HATCH.footpath).toBe('cross');
-    expect(svgFill('footpath')).toBe('url(#hatch-footpath)');
-    expect(svgHatchDefs()).toContain('id="hatch-footpath"');
+    expect(KIND_COLORS.carriageway).toBe('#bfbfbf');
+    expect(KIND_HATCH.buffer).toBe('diagonal');
+    expect(svgFill('buffer')).toBe('url(#hatch-buffer)');
+    expect(svgFill('footpath')).toBe('#ffffff');
+    expect(svgHatchDefs()).toContain('id="hatch-buffer"');
   });
 
   it('edits one kind without touching the others, and the live palette follows', () => {
-    useCst.getState().setKindStyle('cycle', { color: '#112233', hatch: 'dots' });
+    useCst.getState().setKindStyle('cycle', { color: '#112233', hatch: 'dots', ink: '#445566' });
     expect(KIND_COLORS.cycle).toBe('#112233');
     expect(KIND_HATCH.cycle).toBe('dots');
+    expect(svgHatchDefs()).toContain('stroke="#445566"');
     expect(KIND_COLORS.footpath).toBe(STYLE_PRESETS.pastel.footpath.color);
   });
 
