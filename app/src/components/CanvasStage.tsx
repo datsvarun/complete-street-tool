@@ -4,11 +4,13 @@ import Konva from 'konva';
 import type { KonvaEventObject } from 'konva/lib/Node';
 import { useCst } from '../store';
 import { KIND_COLORS } from '../catalog';
+import { kindFill } from '../style/hatchTile';
+import { junctionColor } from '../style/kindStyles';
 import { refFraction } from '../geometry/ribbon';
 import { Basemap } from './Basemap';
 import { buildEdgeGeometry } from '../sections/transition';
 import { offsetPolyline, projectOnPolyline, dist, toFlat, toPts, pointInPolygon } from '../geometry/polyline';
-import { BasemapFab, ScaleBar, CompassRose, LayerRail } from './FloatingUI';
+import { ScaleBar, CompassRose } from './FloatingUI';
 import { PropertiesSidebar } from './PropertiesSidebar';
 import { nodeClassOf } from '../types';
 import type { Boundary, GraphNode, Patch, Snap, StreetEdge, StreetElement, Tool } from '../types';
@@ -153,6 +155,7 @@ function EdgeShape({
 }) {
   const selectEdge = useCst((s) => s.selectEdge);
   const splitEdgeAt = useCst((s) => s.splitEdgeAt);
+  useCst((s) => s.kindStyles); // re-render when the drawing style changes
   const section = edge.section;
   const { bands: baseBands, markings } = useMemo(
     () => (showSections ? buildEdgeGeometry(edge, trim) : { bands: [], markings: [] }),
@@ -230,7 +233,7 @@ function EdgeShape({
           key={`${edge.id}-${b.key}`}
           points={b.polygon}
           closed
-          fill={KIND_COLORS[b.kind]}
+          {...kindFill(b.kind, !showDetail)}
           // LOD: band hairlines are invisible below DETAIL_SCALE; skipping the
           // stroke pass (and its per-shape transform reset) is a big draw win.
           stroke={showDetail ? 'rgba(30,35,40,0.35)' : undefined}
@@ -762,6 +765,7 @@ function ArtifactsLayerImpl({
 }) {
   const selectJunction = useCst((s) => s.selectJunction);
   const vertexOverrides = useCst((s) => s.vertexOverrides);
+  useCst((s) => s.kindStyles); // re-render when the drawing style changes
   const junctionsStage = stage === 'junctions';
   const editStage = stage === 'edit';
   const selectShape = (key: string) => {
@@ -779,7 +783,7 @@ function ArtifactsLayerImpl({
             key={`${j.nodeIds[0]}-cover${bi}`}
             points={b}
             closed
-            fill="#525e6a"
+            fill={junctionColor()}
             listening={false}
             perfectDrawEnabled={false}
           />
@@ -790,7 +794,7 @@ function ArtifactsLayerImpl({
           key={j.key}
           points={applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`])}
           closed
-          fill="#525e6a"
+          fill={junctionColor()}
           stroke={
             junctionsStage
               ? j.key === selectedJunctionKey
@@ -818,7 +822,7 @@ function ArtifactsLayerImpl({
             key={`${j.nodeIds[0]}-${b.key}`}
             points={applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`])}
             closed
-            fill={KIND_COLORS[b.kind]}
+            {...kindFill(b.kind, !showDetail)}
             stroke={showDetail ? 'rgba(30,35,40,0.3)' : undefined}
             strokeWidth={0.5}
             strokeScaleEnabled={false}
@@ -856,7 +860,7 @@ function ArtifactsLayerImpl({
               x={r.cx}
               y={r.cy}
               radius={r.islandR}
-              fill={KIND_COLORS.median}
+              {...kindFill('median', !showDetail)}
               stroke="#f2f0e9"
               strokeWidth={1.2}
               strokeScaleEnabled={false}
@@ -870,7 +874,7 @@ function ArtifactsLayerImpl({
             key={`${t.nodeId}-${b.key}`}
             points={b.polygon}
             closed
-            fill={KIND_COLORS[b.kind]}
+            {...kindFill(b.kind, !showDetail)}
             stroke={showDetail ? 'rgba(30,35,40,0.35)' : undefined}
             strokeWidth={0.6}
             strokeScaleEnabled={false}
@@ -898,6 +902,7 @@ function PatchesLayerImpl({
   scale: number;
 }) {
   const selectPatch = useCst((s) => s.selectPatch);
+  useCst((s) => s.kindStyles); // re-render when the drawing style changes
   const removePatch = useCst((s) => s.removePatch);
   const movePatchVertex = useCst((s) => s.movePatchVertex);
   const removePatchVertex = useCst((s) => s.removePatchVertex);
@@ -909,7 +914,7 @@ function PatchesLayerImpl({
           key={p.id}
           points={p.points}
           closed
-          fill={p.kind === 'cut' ? '#f4f2ec' : KIND_COLORS[p.kind]}
+          {...(p.kind === 'cut' ? { fill: '#f4f2ec' } : kindFill(p.kind))}
           stroke={
             p.id === selectedPatchId
               ? '#e08e45'
@@ -1282,7 +1287,7 @@ const MIN_JUNCTION_R = 1;
 
 /** Fill colour for a mesh face: component palette + the two mesh-only fns. */
 function meshFill(fn: MeshFace['fn']): string {
-  if (fn === 'junction') return '#525e6a';
+  if (fn === 'junction') return junctionColor();
   if (fn === 'island') return KIND_COLORS.median;
   return KIND_COLORS[fn];
 }
@@ -1345,6 +1350,7 @@ function MeshLayerImpl({
   scale: number;
   viewRect: { minX: number; minY: number; maxX: number; maxY: number } | null;
 }) {
+  useCst((s) => s.kindStyles); // re-render when the drawing style changes
   // Node handles: only in select (drag), addnode/split/fillet (click) modes,
   // culled to the viewport and hidden when zoomed far out (they'd be soup).
   const wantNodes = interactive && ['select', 'split', 'fillet'].includes(meshTool);
@@ -1976,11 +1982,11 @@ export function CanvasStage() {
   };
   const STAGE_HINTS: Record<string, string> = {
     network: 'Drag to pan · scroll to zoom · click selects · drag a node onto another to merge',
-    sections: 'Click a street to select it, then pick a section from the panel',
-    junctions: 'Junction polygons are derived from the graph — pick one from the panel to zoom to it',
+    sections: 'Click a street to select it, then pick a section from the Catalogue',
+    junctions: 'Junction polygons are derived from the graph — pick one from the Junctions list to zoom to it',
     mesh: mesh
-      ? 'Every point exists once — drag a node and every abutting shape follows · pick tools from the panel'
-      : 'Generate the mesh from the panel to freeze the design into editable shapes',
+      ? 'Every point exists once — drag a node and every abutting shape follows · pick tools from the ribbon'
+      : 'Generate the mesh from the ribbon to freeze the design into editable shapes',
     detailing: placeKind
       ? `Click a street to place a ${placeKind} · drag to move it within its band · right-click to remove`
       : 'Pick an element from the palette, or drag/right-click existing ones · Esc deselects tool',
@@ -1989,7 +1995,7 @@ export function CanvasStage() {
       : selectedShapeKey
         ? 'Drag any node of the outlined shape · right-click a node resets it · Esc deselects'
         : 'Click any generated surface to edit its nodes, or pick a material to draw a patch',
-    export: 'Set up the title block in the panel, then print or download the plan',
+    export: 'Set up the title block in the ribbon, then print or download the plan',
   };
   const hint = boxDraw
     ? `Drag a rectangle to set the ${boxDraw} area · Esc cancels`
@@ -2267,11 +2273,9 @@ export function CanvasStage() {
         </Layer>
       </Stage>
       <div className="overlay fab-stack">
-        <BasemapFab />
         <ScaleBar scale={view.scale} />
       </div>
       <CompassRose />
-      <LayerRail />
       <PropertiesSidebar />
       <div className="overlay hint-pill">{hint}</div>
       <div className="overlay coords-pill" ref={coordsRef} />

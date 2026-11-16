@@ -268,3 +268,37 @@ export function ribbonBand(pts: Pt[], offsetLeft: number, offsetRight: number): 
   const right = offsetPolyline(pts, offsetRight).reverse();
   return toFlat([...left, ...right]);
 }
+
+/**
+ * Circular arc from `a` to `c` passing through `b`, tessellated at roughly
+ * `stepM` chords (flat [x0, y0, ...] including both ends). Collinear points
+ * return the straight segment a → c.
+ */
+export function arcThrough(a: Pt, b: Pt, c: Pt, stepM = 2): number[] {
+  const d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+  if (Math.abs(d) < 1e-9) return [a.x, a.y, c.x, c.y];
+  const a2 = a.x * a.x + a.y * a.y;
+  const b2 = b.x * b.x + b.y * b.y;
+  const c2 = c.x * c.x + c.y * c.y;
+  const ox = (a2 * (b.y - c.y) + b2 * (c.y - a.y) + c2 * (a.y - b.y)) / d;
+  const oy = (a2 * (c.x - b.x) + b2 * (a.x - c.x) + c2 * (b.x - a.x)) / d;
+  const r = Math.hypot(a.x - ox, a.y - oy);
+  const TAU = 2 * Math.PI;
+  const norm = (t: number) => ((t % TAU) + TAU) % TAU;
+  const ta = Math.atan2(a.y - oy, a.x - ox);
+  // Sweep a → c in the direction that passes through b.
+  const toB = norm(Math.atan2(b.y - oy, b.x - ox) - ta);
+  const toC = norm(Math.atan2(c.y - oy, c.x - ox) - ta);
+  const sweep = toB <= toC ? toC : toC - TAU;
+  const n = Math.max(2, Math.ceil((Math.abs(sweep) * r) / stepM));
+  const out: number[] = [];
+  for (let k = 0; k <= n; k++) {
+    const t = ta + (sweep * k) / n;
+    out.push(ox + r * Math.cos(t), oy + r * Math.sin(t));
+  }
+  out[0] = a.x;
+  out[1] = a.y;
+  out[out.length - 2] = c.x;
+  out[out.length - 1] = c.y;
+  return out;
+}

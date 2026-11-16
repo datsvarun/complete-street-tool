@@ -141,8 +141,11 @@ Patch { kind: ComponentKind | 'cut',         // edit stage: free-form polygon
 | `components/Scene3D.tsx` | lazy three.js viewer of the SceneSpec (orbit camera, sun/sky, ground); loads as its own chunk on first open of the header "3D" button | default export |
 | `store.ts` | one zustand store for all stages + zundo temporal undo (see §7); also boundaries (traced plot/ROW polylines), vertexOverrides, busStops, importFilters | `useCst` |
 | `components/CanvasStage.tsx` | the canvas: view/camera, all Konva layers, draw/snap, marquee/lasso, drag interactions, hover cursors, floating canvas chrome | `CanvasStage` |
-| `components/FloatingUI.tsx` | stage rail, tool rail, basemap FAB, scale bar, compass | |
-| `components/*Panel.tsx`, `StripEditor.tsx` | per-stage panels; StripEditor = bottom-sheet cross-section editor (widths, add/remove, flip, draggable refM arrow with snapping) | |
+| `components/Ribbon.tsx`, `RibbonTabs.tsx`, `RibbonParts.tsx` | the ribbon: title bar + quick-access actions, one tab per stage (plus Draw and View), each a row of labelled tool groups; lists and galleries open as flyouts | `Ribbon` |
+| `components/FloatingUI.tsx` | scale bar, compass | |
+| `components/StripEditor.tsx` | bottom-sheet cross-section editor (widths, add/remove, flip, draggable refM arrow with snapping, width-vs-ROW readout) | |
+| `import/lines.ts`, `import/geojson.ts`, `import/dxf.ts` | file importers: GeoJSON line strings and ASCII DXF (LINE/LWPOLYLINE/POLYLINE/ARC) → polylines → graph via the planar draft commit (adds to the network) | `addLinesToGraph`, `readGeoJsonLines`, `parseDxf` |
+| `style/kindStyles.ts`, `style/hatchTile.ts` | drawing style: colour + hatch per component kind, presets (pastel default, classic flat); live palette read by canvas, SVG export and 3D; editable under Detail → Style | `applyKindStyles`, `kindFill`, `svgFill` |
 | `components/Basemap.tsx`, `GeocodeSearch.tsx` | slaved MapLibre raster basemap; Nominatim search (re-anchors origin only when the graph is empty) | |
 
 ## 6. The junction engine (`graph/junctions.ts`)
@@ -300,13 +303,21 @@ Interaction notes (hard-won — do not "simplify" these away):
 
 ## 9. UI shell (`App.tsx`, `FloatingUI.tsx`)
 
-- Slim header: brand, **standard tool toolbar** (Selection ➤, Direct ▷ —
-  moves nodes/vertices, Rect, Lasso, Draw, Split; draw/split disable outside
-  the network stage), Nominatim geocode search, design-opacity slider,
-  undo/redo. Stage panels carry only their domain-specific choices.
-- **Stage rail** (left edge, vertical): Network → Street → Junction →
-  Detail → **Edit** → Export. Clicking the active stage toggles the
-  **floating panel** beside the rail (`panelOpen` is App-local state).
+- **Ribbon** (top, CAD-style; `components/Ribbon*.tsx`): a title bar with
+  New/Open/Save/Undo/Redo, geocode search, 3D, settings and help; then tabs
+  Network · Draw · Street · Junction · Mesh · Detail · Edit · Export · View.
+  A tab selects its stage (Draw shares the network stage, View is
+  stage-neutral) and shows one band of labelled groups. There is no side
+  panel: lists (streets, junctions, catalogue, validation, patches) open as
+  flyouts under their button. Clicking the active tab, or `P`, collapses
+  the band (`ribbonOpen` is App-local state).
+- **Draw tab**: Line (click vertices) and Arc (three clicks: start, a point
+  on the curve, end — `drawMode` in the store, tessellated by `arcThrough`).
+- **File import** (Network tab): GeoJSON and DXF add to the current network;
+  an empty design re-anchors on a GeoJSON file, a DXF is centred on the map
+  anchor.
+- **Style** (Detail tab): colour and hatch per component kind, stored in the
+  browser (`cst.styles.v1`), not in the document.
 - **Edit stage**: free-form patches — pick a material (or 'cut'), click
   vertices, Enter/double-click closes; vertices drag, right-click removes.
   Patches render above the derived design and export with the plan.

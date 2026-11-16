@@ -3,6 +3,7 @@
 // artifacts, element graphics) so the printed drawing matches the screen.
 import type { Boundary, GraphState, JunctionDesign, Patch, StreetElement } from '../types';
 import { KIND_COLORS } from '../catalog';
+import { junctionColor, svgFill, svgHatchDefs } from '../style/kindStyles';
 import { buildEdgeGeometry } from '../sections/transition';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { CornerMode } from '../graph/junctions';
@@ -43,13 +44,13 @@ export function planContent(
   mesh: Mesh | null = null,
 ): string {
   const { junctions, transitions, trims } = deriveNodeArtifactsCached(g, designs, corners);
-  const out: string[] = [];
+  const out: string[] = [svgHatchDefs()];
 
   // 0. a frozen node-mesh replaces all generated surfaces (1–3): the mesh IS
   // the design once it exists — junction ring first, then everything else.
   if (mesh) {
     const faceFill = (fn: MeshFace['fn']) =>
-      fn === 'junction' ? '#525e6a' : fn === 'island' ? KIND_COLORS.median : KIND_COLORS[fn];
+      fn === 'junction' ? junctionColor() : fn === 'island' ? svgFill('median') : svgFill(fn);
     const sorted = [...mesh.faces].sort((a, b) => (a.fn === 'junction' ? -1 : 0) - (b.fn === 'junction' ? -1 : 0));
     for (const f of sorted) {
       const pts = facePoints(mesh, f);
@@ -60,9 +61,9 @@ export function planContent(
   // 1. carriageway surface + wedges + noses (junctions under ribbons)
   if (!mesh)
     for (const j of junctions) {
-      for (const b of j.coverBands) out.push(poly(b, '#525e6a', 'none', 0));
+      for (const b of j.coverBands) out.push(poly(b, junctionColor(), 'none', 0));
       out.push(
-        poly(applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]), '#525e6a', 'rgba(30,35,40,0.4)', 0.15),
+        poly(applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]), junctionColor(), 'rgba(30,35,40,0.4)', 0.15),
       );
     }
 
@@ -73,7 +74,7 @@ export function planContent(
     if (!mesh)
       for (const b of bands) {
         const pts = applyShapeOverrides(b.polygon, vertexOverrides[`band:${e.id}:${b.key}`]);
-        out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
+        out.push(poly(pts, svgFill(b.kind), 'rgba(30,35,40,0.35)', 0.12));
       }
     for (const m of markings) out.push(pline(m.line, '#f2f0e9', 0.2, m.dashed ? [1, 1] : undefined));
   }
@@ -83,7 +84,7 @@ export function planContent(
     if (!mesh)
       for (const b of [...j.wedges, ...j.noses]) {
         const pts = applyShapeOverrides(b.polygon, vertexOverrides[`jband:${j.key}:${b.key}`]);
-        out.push(poly(pts, KIND_COLORS[b.kind], 'rgba(30,35,40,0.3)', 0.1));
+        out.push(poly(pts, svgFill(b.kind), 'rgba(30,35,40,0.3)', 0.1));
       }
     if (j.roundabout) {
       const r = j.roundabout;
@@ -94,7 +95,7 @@ export function planContent(
     }
   }
   for (const t of transitions) {
-    for (const b of t.bands) out.push(poly(b.polygon, KIND_COLORS[b.kind], 'rgba(30,35,40,0.35)', 0.12));
+    for (const b of t.bands) out.push(poly(b.polygon, svgFill(b.kind), 'rgba(30,35,40,0.35)', 0.12));
   }
 
   // 4. lane dividers + parametric decals (parking ticks, cycle chevrons)

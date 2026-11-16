@@ -5,6 +5,7 @@ import {
   COMPONENT_DEFAULTS,
   COMPONENT_MINS,
   normalizeWidth,
+  widthBudget,
   RES_CLICK,
   RES_TYPING,
 } from '../sections/rules';
@@ -23,6 +24,7 @@ function belowMin(c: SectionComponent): { minM: number; source: string } | null 
 
 export function StripEditor() {
   const edges = useCst((s) => s.edges);
+  useCst((s) => s.kindStyles); // re-render when the drawing style changes
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const updateSectionComponents = useCst((s) => s.updateSectionComponents);
   const updateSectionRef = useCst((s) => s.updateSectionRef);
@@ -157,6 +159,8 @@ export function StripEditor() {
     setRefEdit(null);
   };
 
+  const budget = catalog ? widthBudget(total, catalog.rowWidthM) : null;
+
   return (
     <div className="strip-editor">
       <div className="strip-head">
@@ -168,6 +172,13 @@ export function StripEditor() {
             · Σ {total.toFixed(2)} m
             {catalog && ` · based on “${catalog.name}” (${catalog.rowWidthM} m ROW)`}
           </span>
+          {budget && (
+            <span className={budget.over ? 'small issues-inline' : 'muted small'} title="Section width against the right-of-way it is based on">
+              {' '}
+              · {budget.over ? '⚠ ' : ''}
+              {budget.label}
+            </span>
+          )}
         </span>
         <span className="strip-actions">
           <button onClick={() => flipSection(edge.id)} title="Mirror the section left↔right">

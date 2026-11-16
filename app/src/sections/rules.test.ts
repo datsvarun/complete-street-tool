@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { autoAssignSections } from './rules';
+import { autoAssignSections, widthBudget } from './rules';
 import { getSection } from '../catalog';
 import type { GraphState } from '../types';
 
@@ -30,5 +30,13 @@ describe('autoAssignSections defaults', () => {
   it('still assigns the first config where no preference exists', () => {
     const { assigned } = autoAssignSections(graphWith('tertiary'));
     expect(getSection(assigned.e1.catalogId)?.rowWidthM).toBe(18);
+  });
+});
+
+describe('widthBudget', () => {
+  it('reports over, spare and exact fits', () => {
+    expect(widthBudget(12.5, 12)).toEqual({ deltaM: 0.5, label: '0.50 m over the ROW', over: true });
+    expect(widthBudget(11.2, 12)).toEqual({ deltaM: -0.8, label: '0.80 m spare', over: false });
+    expect(widthBudget(12.001, 12)).toEqual({ deltaM: 0, label: 'fits the ROW', over: false });
   });
 });

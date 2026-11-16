@@ -64,6 +64,18 @@ export function normalizeWidth(w: number, resolution: number): number {
   return Math.round(Math.round(clamped / resolution) * resolution * 1000) / 1000;
 }
 
+/**
+ * How a section's total width compares with the width it has to fit
+ * (the catalog ROW it is based on). Report only — nothing is resized.
+ */
+export function widthBudget(totalM: number, targetM: number): { deltaM: number; label: string; over: boolean } {
+  const deltaM = Math.round((totalM - targetM) * 100) / 100;
+  if (Math.abs(deltaM) < 0.005) return { deltaM: 0, label: 'fits the ROW', over: false };
+  return deltaM > 0
+    ? { deltaM, label: `${deltaM.toFixed(2)} m over the ROW`, over: true }
+    : { deltaM, label: `${(-deltaM).toFixed(2)} m spare`, over: false };
+}
+
 export function materialize(section: CrossSection): EdgeSection {
   return {
     catalogId: section.id,

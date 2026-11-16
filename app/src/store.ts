@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { temporal } from 'zundo';
 import type {
   Boundary,
+  ComponentKind,
   DcCandidate,
   DraftVert,
   ElementKind,
@@ -19,7 +20,9 @@ import type {
   Tool,
 } from './types';
 import { DEFAULT_WIDTH, pruneElements, resolveDrop, suggestBusStops, suggestElements, suggestTurnArrows, suggestZebras } from './detailing/elements';
-import { projectOnPolyline } from './geometry/polyline';
+import { arcThrough, projectOnPolyline } from './geometry/polyline';
+import { addLinesToGraph } from './import/lines';
+import type { ImportLine } from './import/lines';
 import { deriveNodeArtifactsCached } from './graph/junctions';
 import {
   commitDraft,
@@ -40,6 +43,8 @@ import { detectDualCarriageways, manualDcCandidate, mergeDualCarriageway } from 
 import { DEFAULT_FILTERS, fetchOverpassBbox, parseBusStops, parseOsm, toLatLon, toLocal, DEFAULT_IMPORT } from './osm/overpass';
 import type { BusStopPoint, ImportFilters, LatLon } from './osm/overpass';
 import { getSection } from './catalog';
+import { applyKindStyles, completeStyles, STYLE_PRESETS } from './style/kindStyles';
+import type { KindStyle, KindStyles, StylePreset } from './style/kindStyles';
 import { autoAssignSections, materialize } from './sections/rules';
 import { clearAutosave, fromDocument, readAutosave, writeAutosave } from './persistence';
 import { buildMesh, cutAcross, deleteFaceAbsorb, filletNode, insertOnSegment, mergeFaces, moveNode as meshMove, retypeFace, splitFace, weldNodes } from './mesh/engine';
@@ -89,6 +94,31 @@ const DEFAULT_LAYERS: Record<LayerKey, boolean> = {
 
 const DEFAULT_SETTINGS: AppSettings = { theme: 'day', drive: 'lht', junctionCorners: 'common', lod: true };
 const SETTINGS_KEY = 'cst.settings.v1';
+const STYLES_KEY = 'cst.styles.v1';
+
+/** Stored drawing style (or the default), applied to the live palette. */
+function readStyles(): KindStyles {
+  let stored = null;
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STYLES_KEY) : null;
+    stored = raw ? JSON.parse(raw) : null;
+  } catch {
+    // unreadable — fall back to the default style
+  }
+  const styles = completeStyles(stored);
+  applyKindStyles(styles);
+  return styles;
+}
+
+function commitStyles(kindStyles: KindStyles) {
+  applyKindStyles(kindStyles);
+  try {
+    localStorage.setItem(STYLES_KEY, JSON.stringify(kindStyles));
+  } catch {
+    // storage unavailable — the style stays session-local
+  }
+  return { kindStyles };
+}
 
 function readSettings(): AppSettings {
   try {
@@ -151,6 +181,11 @@ interface CstState extends GraphState {
   importBusy: boolean;
   reviewList: ReviewItem[];
   settings: AppSettings;
+  /** Colour + hatch per component kind (mirrors the live palette in
+   *  style/kindStyles.ts; a browser preference, not part of the document). */
+  kindStyles: KindStyles;
+  setKindStyle: (kind: ComponentKind, patch: Partial<KindStyle>) => void;
+  setStylePreset: (preset: StylePreset) => void;
   /** Layer visibility (UI state): hiding a layer never touches the data. */
   layers: Record<LayerKey, boolean>;
   /** Frozen node-mesh (MESH_INTEGRATION_SPEC): generated on entering the Mesh
@@ -164,6 +199,10 @@ interface CstState extends GraphState {
 
   setStage: (stage: Stage) => void;
   setTool: (tool: Tool) => void;
+  /** How the Draw tool turns clicks into a street: straight segments, or a
+   *  circular arc through three clicks (start, a point on the arc, end). */
+  drawMode: 'line' | 'arc';
+  setDrawMode: (mode: 'line' | 'arc') => void;
   addDraftVert: (v: DraftVert) => void;
   /** Backspace while drawing: drop the last vertex, keep drawing. */
   popDraftVert: () => void;
@@ -196,6 +235,8 @@ interface CstState extends GraphState {
   simplifyAll: (tolM: number) => void;
   cleanNetwork: () => void;
   importOsmBbox: () => Promise<void>;
+  /** Add polylines from a file import (GeoJSON, DXF) to the current network. */
+  importLines: (lines: ImportLine[], label: string, origin?: LatLon) => void;
   setImportFilter: (key: keyof ImportFilters, value: boolean) => void;
   setBoxDraw: (purpose: 'import' | 'export' | null) => void;
   setBox: (purpose: 'import' | 'export', b: Bounds | null) => void;
@@ -364,6 +405,10 @@ export const useCst = create<CstState>()(
       importBusy: false,
       reviewList: [],
       settings: readSettings(),
+      kindStyles: readStyles(),
+      setKindStyle: (kind, patch) =>
+        set((s) => commitStyles({ ...s.kindStyles, [kind]: { ...s.kindStyles[kind], ...patch } })),
+      setStylePreset: (preset) => set(() => commitStyles(completeStyles(STYLE_PRESETS[preset]))),
       layers: { ...DEFAULT_LAYERS },
       mesh: null,
       meshTool: 'select',
@@ -414,7 +459,24 @@ export const useCst = create<CstState>()(
           draft: tool === 'draw' ? s.draft : [],
         })),
 
-      addDraftVert: (v) => set((s) => ({ draft: [...s.draft, v] })),
+      drawMode: 'line',
+      setDrawMode: (drawMode) => set({ drawMode, draft: [] }),
+
+      addDraftVert: (v) => {
+        const s = get();
+        if (s.drawMode !== 'arc' || s.draft.length < 2) {
+          set({ draft: [...s.draft, v] });
+          return;
+        }
+        // Third click of an arc: swap the middle click for the tessellated
+        // curve (the ends keep their snaps) and commit it as one street.
+        const [a, b] = s.draft;
+        const pts = arcThrough(a, b, v);
+        const mid: DraftVert[] = [];
+        for (let i = 2; i + 3 < pts.length; i += 2) mid.push({ x: pts[i], y: pts[i + 1], snap: null });
+        set({ draft: [a, ...mid, v] });
+        get().finishDraft(0.05);
+      },
 
       popDraftVert: () => set((s) => ({ draft: s.draft.slice(0, -1) })),
 
@@ -780,6 +842,23 @@ export const useCst = create<CstState>()(
         } catch (err) {
           set({ importBusy: false, statusMsg: `Import failed: ${(err as Error).message}` });
         }
+      },
+
+      importLines: (lines, label, origin) => {
+        if (!get().guardMeshEdit()) return;
+        const s = get();
+        const { g, added } = addLinesToGraph(pickGraph(s), lines);
+        if (added === 0) {
+          set({ statusMsg: `${label}: no line geometry found` });
+          return;
+        }
+        set({
+          ...g,
+          ...(origin ? { origin } : {}),
+          dcCandidates: null,
+          pendingFit: graphBounds(g),
+          statusMsg: `${label}: ${added} street segment(s) added`,
+        });
       },
 
       scanDualCarriageways: () =>

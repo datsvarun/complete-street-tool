@@ -117,7 +117,7 @@ member shape disappears.
 | `cad/vertexOverrides.ts` | unchanged substrate: perimeter-fraction keys, local-frame deltas, stale-key skipping |
 | `store.ts` | `setVertexDeltas` / `removeVertexDeltas` (one undo step across shapes), `meshEdit` toggle (default **on**) |
 | `components/CanvasStage.tsx` | `ShapeEditLayer` renders **green handles for shared nodes**, orange for shape-private ones; drags/right-click resets fan out to all members; nodes snap to traced plot boundaries |
-| `components/EditPanel.tsx` | welded-mesh toggle + explanation |
+| `components/RibbonTabs.tsx` (Edit tab) | welded-mesh toggle + explanation |
 
 ## 3. Behaviour contract (tested in `cad/mesh.test.ts`)
 

@@ -1,12 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useCst } from './store';
-import { downloadDocument } from './persistence';
 
 // three.js loads only when the 3D view opens — the plan editor stays lean.
 const Scene3D = lazy(() => import('./components/Scene3D'));
 
 /** Global status toast: every store statusMsg surfaces here, auto-dismissing —
- *  feedback no longer depends on which panel happens to be open. */
+ *  feedback no longer depends on which ribbon tab happens to be open. */
 function Toast() {
   const statusMsg = useCst((s) => s.statusMsg);
   const [shown, setShown] = useState(false);
@@ -33,7 +32,7 @@ const SHORTCUTS: Array<[string, string]> = [
   ['M / L', 'Rectangle · Lasso selection'],
   ['D / X / E', 'Draw · Split · Delete street (network stage)'],
   ['F', 'Fit the whole network'],
-  ['P', 'Show / hide the stage panel'],
+  ['P', 'Collapse / expand the ribbon'],
   ['Ctrl+Z / Ctrl+Shift+Z', 'Undo · Redo'],
   ['Ctrl+A', 'Select all streets'],
   ['Enter / double-click', 'Finish street, boundary, or patch'],
@@ -138,17 +137,9 @@ function HelpOverlay({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
-import { NetworkPanel } from './components/NetworkPanel';
-import { SectionsPanel } from './components/SectionsPanel';
 import { CanvasStage } from './components/CanvasStage';
 import { StripEditor } from './components/StripEditor';
-import { GeocodeSearch } from './components/GeocodeSearch';
-import { JunctionsPanel } from './components/JunctionsPanel';
-import { DetailingPanel } from './components/DetailingPanel';
-import { ExportPanel } from './components/ExportPanel';
-import { EditPanel } from './components/EditPanel';
-import { MeshPanel } from './components/MeshPanel';
-import { StageRail, TopToolbar } from './components/FloatingUI';
+import { Ribbon } from './components/Ribbon';
 import type { Stage, Tool } from './types';
 
 const STAGE_KEYS: Record<string, Stage> = {
@@ -173,28 +164,17 @@ const TOOL_KEYS: Record<string, Tool> = {
 
 export default function App() {
   const stage = useCst((s) => s.stage);
-  const designOpacity = useCst((s) => s.designOpacity);
-  const setDesignOpacity = useCst((s) => s.setDesignOpacity);
-  const [panelOpen, setPanelOpen] = useState(true);
+  const [ribbonOpen, setRibbonOpen] = useState(true);
   const [helpOpen, setHelpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [view3d, setView3d] = useState(false);
   const overlayRef = useRef({ open: false });
   overlayRef.current = { open: helpOpen || view3d || settingsOpen };
-  const fileRef = useRef<HTMLInputElement>(null);
   const theme = useCst((s) => s.settings.theme);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
-
-  const openFile = async (file: File) => {
-    try {
-      useCst.getState().loadDocument(JSON.parse(await file.text()), file.name);
-    } catch {
-      useCst.setState({ statusMsg: `Open failed: ${file.name} is not valid JSON` });
-    }
-  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -256,7 +236,7 @@ export default function App() {
       } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (STAGE_KEYS[k]) {
           s.setStage(STAGE_KEYS[k]);
-          setPanelOpen(true);
+          setRibbonOpen(true);
         } else if (TOOL_KEYS[k]) {
           // direct is network-only (nodes & vertices render there); draw/split/
           // erase also work in the street stage (mid-street section changes)
@@ -266,7 +246,7 @@ export default function App() {
         } else if (k === 'f') {
           s.fitAll();
         } else if (k === 'p') {
-          setPanelOpen((o) => !o);
+          setRibbonOpen((o) => !o);
         }
       }
     };
@@ -276,97 +256,20 @@ export default function App() {
 
   return (
     <div className="app">
-      <header>
-        <span className="brand">
-          CST <span className="muted">· IRC Street Designer</span>
-        </span>
-        <TopToolbar />
-        <GeocodeSearch />
-        <div className="header-actions">
-          <button onClick={() => downloadDocument(useCst.getState())} title="Save the design as a .cst.json file">
-            Save
-          </button>
-          <button onClick={() => fileRef.current?.click()} title="Open a saved .cst.json design">
-            Open
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".json,application/json"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) openFile(f);
-              e.target.value = '';
-            }}
-          />
-          <button
-            onClick={() => {
-              if (window.confirm('Start a new design? The current design will be discarded.')) {
-                useCst.getState().clearAll();
-              }
-            }}
-            title="Clear everything and start a new design"
-          >
-            New
-          </button>
-          <label className="opacity-slider" title="Design layer transparency (see the basemap through the plan)">
-            <span className="muted small">design</span>
-            <input
-              type="range"
-              min="15"
-              max="100"
-              value={Math.round(designOpacity * 100)}
-              onChange={(e) => setDesignOpacity(parseInt(e.target.value, 10) / 100)}
-            />
-          </label>
-          <button onClick={() => useCst.getState().undo()} title="Undo (Ctrl+Z)">
-            ↩
-          </button>
-          <button onClick={() => useCst.getState().redo()} title="Redo (Ctrl+Shift+Z)">
-            ↪
-          </button>
-          <button onClick={() => setView3d(true)} title="Preview the design in 3D">
-            3D
-          </button>
-          <button onClick={() => setSettingsOpen(true)} title="Settings — theme, traffic side, junction blending">
-            ⚙
-          </button>
-          <button onClick={() => setHelpOpen(true)} title="Keyboard shortcuts (?)">
-            ?
-          </button>
-        </div>
-      </header>
+      <Ribbon
+        open={ribbonOpen}
+        onToggle={setRibbonOpen}
+        onOpen3d={() => setView3d(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenHelp={() => setHelpOpen(true)}
+      />
       <main>
         <div className="canvas-col">
           <CanvasStage />
           {stage === 'sections' && <StripEditor />}
         </div>
-        <StageRail panelOpen={panelOpen} onToggle={setPanelOpen} />
-        {panelOpen && (
-          <div className="floating-panel overlay">
-            <button className="panel-close" title="Close panel (P)" onClick={() => setPanelOpen(false)}>
-              ×
-            </button>
-            {stage === 'sections' ? (
-              <SectionsPanel />
-            ) : stage === 'junctions' ? (
-              <JunctionsPanel />
-            ) : stage === 'mesh' ? (
-              <MeshPanel />
-            ) : stage === 'detailing' ? (
-              <DetailingPanel />
-            ) : stage === 'edit' ? (
-              <EditPanel />
-            ) : stage === 'export' ? (
-              <ExportPanel />
-            ) : (
-              <NetworkPanel />
-            )}
-          </div>
-        )}
+        <Toast />
       </main>
-      <Toast />
       {helpOpen && <HelpOverlay onClose={() => setHelpOpen(false)} />}
       {settingsOpen && <SettingsOverlay onClose={() => setSettingsOpen(false)} />}
       {view3d && (

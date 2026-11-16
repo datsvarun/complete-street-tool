@@ -5,6 +5,7 @@
 // components, cycle tracks halfway.
 import type { GraphState, JunctionDesign, Patch, StreetElement, ComponentKind } from '../types';
 import { KIND_COLORS } from '../catalog';
+import { junctionColor } from '../style/kindStyles';
 import { deriveNodeArtifactsCached } from '../graph/junctions';
 import type { CornerMode } from '../graph/junctions';
 import { buildEdgeGeometry } from '../sections/transition';
@@ -94,10 +95,10 @@ export function buildScene(
       polygon: applyShapeOverrides(j.polygon, vertexOverrides[`jring:${j.key}`]),
       base: 0,
       height: ROAD_H,
-      color: '#525e6a',
+      color: junctionColor(),
     });
     j.coverBands.forEach((b, i) =>
-      prisms.push({ key: `jcover:${j.key}:${i}`, polygon: b, base: 0, height: ROAD_H, color: '#525e6a' }),
+      prisms.push({ key: `jcover:${j.key}:${i}`, polygon: b, base: 0, height: ROAD_H, color: junctionColor() }),
     );
     for (const b of [...j.wedges, ...j.noses]) {
       prisms.push({

@@ -8,6 +8,7 @@ import type { ComponentKind } from '../types';
 
 export function PropertiesSidebar() {
   const stage = useCst((s) => s.stage);
+  useCst((s) => s.kindStyles); // re-render when the drawing style changes
   const mesh = useCst((s) => s.mesh);
   const selectedFaceId = useCst((s) => s.selectedFaceId);
   const meshDeleteFace = useCst((s) => s.meshDeleteFace);
