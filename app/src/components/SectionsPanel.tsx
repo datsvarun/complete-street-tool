@@ -7,8 +7,7 @@ export function SectionsPanel() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const reviewList = useCst((s) => s.reviewList);
-  const statusMsg = useCst((s) => s.statusMsg);
-  const assignSection = useCst((s) => s.assignSection);
+  const assignSectionToSelected = useCst((s) => s.assignSectionToSelected);
   const selectEdge = useCst((s) => s.selectEdge);
   const dismissReview = useCst((s) => s.dismissReview);
   const autoAssign = useCst((s) => s.autoAssign);
@@ -38,10 +37,15 @@ export function SectionsPanel() {
         <p className="muted">Click a street on the canvas, or an item in the review list.</p>
       )}
       {selected?.section && (
-        <button className="danger" onClick={() => assignSection(selected.id, null)}>
+        <button className="danger" onClick={() => assignSectionToSelected(null)}>
           Remove section
         </button>
       )}
+
+      <p className="muted small">
+        For a mid-street section change, use the Split tool (✂ / X) from the
+        toolbar — the shared node becomes a smooth transition automatically.
+      </p>
 
       <h3>Auto-assignment</h3>
       <button onClick={() => autoAssign()}>Assign from highway class</button>
@@ -64,21 +68,36 @@ export function SectionsPanel() {
         </>
       )}
 
-      <h3>IRC SP:118-2018 catalog</h3>
+      <h3>Road sections</h3>
+      <p className="muted small">
+        Sorted by right-of-way. “Standard” = rule of thirds (⅓ to sidewalks,
+        0.6 m median from 12 m up); “IRC” = SP:118-2018 configurations.
+      </p>
       <div className="catalog">
         {CATALOG_BY_ROW.map((group) => (
-          <details key={group.rowWidthM} open={group.rowWidthM === 24}>
+          <details key={group.rowWidthM} open>
             <summary>{group.rowWidthM} m ROW</summary>
             {group.sections.map((s) => (
               <button
                 key={s.id}
                 className={currentCatalog?.id === s.id ? 'catalog-item active' : 'catalog-item'}
                 disabled={!selected}
-                title={selected ? undefined : 'Select a street first'}
-                onClick={() => selected && assignSection(selected.id, s.id)}
+                title={selected ? s.name : 'Select a street first'}
+                onClick={() => selected && assignSectionToSelected(s.id)}
               >
-                <span>{s.name}</span>
-                <span className="muted">Σ {s.totalWidthM.toFixed(2)} m</span>
+                <span className="catalog-title">
+                  {s.label}
+                  <span className="muted small"> Σ {s.totalWidthM.toFixed(1)} m</span>
+                </span>
+                <span className="mini-section">
+                  {s.components.map((c, i) => (
+                    <span
+                      key={i}
+                      style={{ flexGrow: c.widthM, background: KIND_COLORS[c.kind] }}
+                      title={`${c.element} ${c.widthM} m`}
+                    />
+                  ))}
+                </span>
               </button>
             ))}
           </details>
@@ -98,7 +117,6 @@ export function SectionsPanel() {
           </ul>
         </>
       )}
-      {statusMsg && <p className="status small">{statusMsg}</p>}
     </div>
   );
 }

@@ -25,12 +25,15 @@ export function StripEditor() {
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
   const updateSectionComponents = useCst((s) => s.updateSectionComponents);
+  const updateSectionRef = useCst((s) => s.updateSectionRef);
+  const flipSection = useCst((s) => s.flipSection);
   const edge = selectedEdgeId ? edges[selectedEdgeId] : null;
   const section = edge?.section ?? null;
 
   const [selIdx, setSelIdx] = useState<number | null>(null);
   const [widthText, setWidthText] = useState('');
   const [addKind, setAddKind] = useState(COMPONENT_DEFAULTS[0].element);
+  const [refEdit, setRefEdit] = useState<string | null>(null); // manual centerline entry
 
   useEffect(() => {
     setSelIdx(null);
@@ -93,6 +96,42 @@ export function StripEditor() {
     setSelIdx(null);
   };
 
+  // Centerline reference marker: snaps to component edges, component centers
+  // and the section midpoint (the default).
+  const refM = Math.max(0, Math.min(total, section.refM ?? total / 2));
+  const snapCandidates = (() => {
+    const c: number[] = [0, total / 2, total];
+    let cum = 0;
+    for (const comp of comps) {
+      c.push(cum + comp.widthM / 2);
+      cum += comp.widthM;
+      c.push(cum);
+    }
+    return [...new Set(c.map((v) => Math.round(v * 100) / 100))].sort((a, b) => a - b);
+  })();
+
+  const dragRef = (ev: React.PointerEvent<HTMLDivElement>) => {
+    const track = ev.currentTarget;
+    const rect = track.getBoundingClientRect();
+    const toRefM = (clientX: number) => {
+      const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      const raw = frac * total;
+      let best = snapCandidates[0];
+      for (const cand of snapCandidates) {
+        if (Math.abs(cand - raw) < Math.abs(best - raw)) best = cand;
+      }
+      return best;
+    };
+    updateSectionRef(edge.id, toRefM(ev.clientX));
+    const move = (me: PointerEvent) => updateSectionRef(edge.id, toRefM(me.clientX));
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   const add = () => {
     const def = COMPONENT_DEFAULTS.find((d) => d.element === addKind)!;
     const next = comps.slice();
@@ -100,6 +139,22 @@ export function StripEditor() {
     next.splice(at, 0, { element: def.element, widthM: def.widthM, kind: def.kind });
     update(next);
     setSelIdx(at);
+  };
+
+  // In-place swap: change the selected component's type, keeping its width.
+  const swapKind = (element: string) => {
+    if (selIdx === null) return;
+    const def = COMPONENT_DEFAULTS.find((d) => d.element === element);
+    if (!def) return;
+    update(comps.map((c, i) => (i === selIdx ? { ...c, element: def.element, kind: def.kind } : c)));
+  };
+
+  const commitRef = () => {
+    if (refEdit !== null) {
+      const v = parseFloat(refEdit);
+      if (Number.isFinite(v)) updateSectionRef(edge.id, v);
+    }
+    setRefEdit(null);
   };
 
   return (
@@ -115,8 +170,25 @@ export function StripEditor() {
           </span>
         </span>
         <span className="strip-actions">
+          <button onClick={() => flipSection(edge.id)} title="Mirror the section left↔right">
+            ⇋ Flip
+          </button>
           {sel && (
             <>
+              <select
+                value={COMPONENT_DEFAULTS.find((d) => d.kind === sel.kind)?.element ?? ''}
+                onChange={(e) => swapKind(e.target.value)}
+                title="Change this component's type in place (width stays)"
+              >
+                {!COMPONENT_DEFAULTS.some((d) => d.kind === sel.kind) && (
+                  <option value="">{sel.element}</option>
+                )}
+                {COMPONENT_DEFAULTS.map((d) => (
+                  <option key={d.element} value={d.element}>
+                    {d.element}
+                  </option>
+                ))}
+              </select>
               <button onClick={() => nudge(-RES_CLICK)}>−0.1</button>
               <input
                 className="w-input"
@@ -140,6 +212,40 @@ export function StripEditor() {
           </select>
           <button onClick={add}>Add</button>
         </span>
+      </div>
+      <div
+        className="ref-track"
+        onPointerDown={refEdit === null ? dragRef : undefined}
+        title="Drag: where the drawn centerline sits (snaps to component edges, centers, and the middle) · click the number to type it"
+      >
+        <div className="ref-marker" style={{ left: `${(refM / Math.max(total, 0.01)) * 100}%` }}>
+          <span className="ref-arrow">▲</span>
+          {refEdit === null ? (
+            <span
+              className="ref-label editable"
+              title="Click to type an exact centerline position"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                setRefEdit(refM.toFixed(2));
+              }}
+            >
+              {refM.toFixed(2)} m
+            </span>
+          ) : (
+            <input
+              className="ref-input"
+              autoFocus
+              value={refEdit}
+              onChange={(e) => setRefEdit(e.target.value)}
+              onBlur={commitRef}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRef();
+                if (e.key === 'Escape') setRefEdit(null);
+              }}
+              onPointerDown={(e) => e.stopPropagation()}
+            />
+          )}
+        </div>
       </div>
       <div className="strip-row">
         {comps.map((c, i) => {

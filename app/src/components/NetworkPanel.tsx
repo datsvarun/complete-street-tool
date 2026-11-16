@@ -1,74 +1,145 @@
-import { useMemo, useState } from 'react';
-import { useCst, DEFAULT_IMPORT } from '../store';
+import { useMemo } from 'react';
+import { useCst } from '../store';
 import { polylineLength } from '../geometry/polyline';
 import { validateGraph } from '../graph/validate';
 
+const MAX_IMPORT_KM2 = 3; // keeps the Overpass query and the graph tractable
+
 export function NetworkPanel() {
-  const tool = useCst((s) => s.tool);
   const nodes = useCst((s) => s.nodes);
   const edges = useCst((s) => s.edges);
   const selectedEdgeId = useCst((s) => s.selectedEdgeId);
+  const selectedEdgeIds = useCst((s) => s.selectedEdgeIds);
+  const removeEdges = useCst((s) => s.removeEdges);
+  const mergeSelectedAsDc = useCst((s) => s.mergeSelectedAsDc);
   const dcCandidates = useCst((s) => s.dcCandidates);
-  const statusMsg = useCst((s) => s.statusMsg);
   const importBusy = useCst((s) => s.importBusy);
-  const setTool = useCst((s) => s.setTool);
   const selectEdge = useCst((s) => s.selectEdge);
-  const removeEdge = useCst((s) => s.removeEdge);
   const simplifyAll = useCst((s) => s.simplifyAll);
   const cleanNetwork = useCst((s) => s.cleanNetwork);
-  const importOsm = useCst((s) => s.importOsm);
+  const importOsmBbox = useCst((s) => s.importOsmBbox);
+  const importFilters = useCst((s) => s.importFilters);
+  const setImportFilter = useCst((s) => s.setImportFilter);
+  const boundaryDraw = useCst((s) => s.boundaryDraw);
+  const setBoundaryDraw = useCst((s) => s.setBoundaryDraw);
+  const boundaryCount = useCst((s) => Object.keys(s.boundaries).length);
+  const setBoxDraw = useCst((s) => s.setBoxDraw);
+  const boxDraw = useCst((s) => s.boxDraw);
+  const importBox = useCst((s) => s.importBox);
+  const setBox = useCst((s) => s.setBox);
+  const mergeNodePair = useCst((s) => s.mergeNodePair);
+  const focusNode = useCst((s) => s.focusNode);
   const scanDualCarriageways = useCst((s) => s.scanDualCarriageways);
   const applyDcMerge = useCst((s) => s.applyDcMerge);
   const setHighlight = useCst((s) => s.setHighlight);
 
-  const [lat, setLat] = useState(String(DEFAULT_IMPORT.lat));
-  const [lon, setLon] = useState(String(DEFAULT_IMPORT.lon));
-  const [radius, setRadius] = useState(String(DEFAULT_IMPORT.radiusM));
-
   const edgeList = useMemo(() => Object.values(edges), [edges]);
   const issues = useMemo(() => validateGraph({ nodes, edges, nextNodeNum: 0, nextEdgeNum: 0 }), [nodes, edges]);
+
+  // Unconnected node pairs closer than 2 m — junction geometry degenerates on
+  // these later, so surface them with a one-click merge (grid-bucketed scan).
+  const nearPairs = useMemo(() => {
+    const TOL = 2;
+    const cells = new Map<string, string[]>();
+    for (const n of Object.values(nodes)) {
+      const k = `${Math.floor(n.x / TOL)}:${Math.floor(n.y / TOL)}`;
+      (cells.get(k) ?? cells.set(k, []).get(k)!).push(n.id);
+    }
+    const linked = new Set(Object.values(edges).flatMap((e) => [`${e.a}|${e.b}`, `${e.b}|${e.a}`]));
+    const out: Array<{ a: string; b: string; d: number }> = [];
+    for (const n of Object.values(nodes)) {
+      const cx = Math.floor(n.x / TOL);
+      const cy = Math.floor(n.y / TOL);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (const mid of cells.get(`${cx + dx}:${cy + dy}`) ?? []) {
+            if (mid <= n.id) continue; // each pair once
+            const m = nodes[mid];
+            const d = Math.hypot(m.x - n.x, m.y - n.y);
+            if (d < TOL && !linked.has(`${n.id}|${mid}`)) out.push({ a: n.id, b: mid, d });
+          }
+        }
+      }
+    }
+    return out.sort((p, q) => p.d - q.d).slice(0, 12);
+  }, [nodes, edges]);
   const selected = selectedEdgeId ? edges[selectedEdgeId] : null;
 
   return (
     <div className="panel">
       <h2>Network</h2>
 
+      <h3>Import OSM — by area</h3>
+      <p className="muted small">
+        Pan/zoom (or search a place) to the area you want, draw a box, confirm,
+        and only that extent downloads.
+      </p>
       <div className="tool-row">
-        <button className={tool === 'select' ? 'active' : ''} onClick={() => setTool('select')}>
-          Select
+        <button className={boxDraw === 'import' ? 'active' : ''} onClick={() => setBoxDraw(boxDraw === 'import' ? null : 'import')}>
+          {boxDraw === 'import' ? 'Drag on canvas…' : importBox ? 'Redraw area' : 'Draw import area'}
         </button>
-        <button className={tool === 'draw' ? 'active' : ''} onClick={() => setTool('draw')}>
-          Draw
-        </button>
-        <button className={tool === 'split' ? 'active' : ''} onClick={() => setTool('split')}>
-          Split
-        </button>
+        {importBox && (
+          <button onClick={() => setBox('import', null)}>Clear</button>
+        )}
       </div>
+      <div className="filter-row">
+        <label title="Keep elevated ways (bridge=*) — off imports the at-grade network only">
+          <input
+            type="checkbox"
+            checked={importFilters.flyovers}
+            onChange={(e) => setImportFilter('flyovers', e.target.checked)}
+          />
+          flyovers
+        </label>
+        <label title="Keep service alleys and parking aisles">
+          <input
+            type="checkbox"
+            checked={importFilters.serviceRoads}
+            onChange={(e) => setImportFilter('serviceRoads', e.target.checked)}
+          />
+          service lanes
+        </label>
+        <label title="Also import separate footway/path geometries">
+          <input
+            type="checkbox"
+            checked={importFilters.paths}
+            onChange={(e) => setImportFilter('paths', e.target.checked)}
+          />
+          footpaths
+        </label>
+      </div>
+      {importBox && (() => {
+        const wKm = (importBox.maxX - importBox.minX) / 1000;
+        const hKm = (importBox.maxY - importBox.minY) / 1000;
+        const km2 = wKm * hKm;
+        const over = km2 > MAX_IMPORT_KM2;
+        return (
+          <>
+            <p className={over ? 'small issues-inline' : 'muted small'}>
+              {(wKm * 1000).toFixed(0)} × {(hKm * 1000).toFixed(0)} m ·{' '}
+              {km2 < 0.01 ? `${(km2 * 100).toFixed(1)} ha` : `${km2.toFixed(2)} km²`}
+              {over ? ` — too large (max ${MAX_IMPORT_KM2} km²), draw a smaller box` : ''}
+            </p>
+            <button disabled={over || importBusy} onClick={() => importOsmBbox()}>
+              {importBusy ? 'Downloading…' : 'Download this area'}
+            </button>
+          </>
+        );
+      })()}
 
-      <h3>Import OSM</h3>
-      <div className="field-row">
-        <label>
-          lat
-          <input value={lat} onChange={(e) => setLat(e.target.value)} />
-        </label>
-        <label>
-          lon
-          <input value={lon} onChange={(e) => setLon(e.target.value)} />
-        </label>
-        <label>
-          r (m)
-          <input value={radius} onChange={(e) => setRadius(e.target.value)} />
-        </label>
-      </div>
-      <div className="tool-row">
-        <button
-          disabled={importBusy}
-          onClick={() => importOsm(parseFloat(lat), parseFloat(lon), parseFloat(radius))}
-        >
-          Import from OSM
-        </button>
-      </div>
       <p className="muted small">Replaces the current network. Data © OpenStreetMap contributors.</p>
+
+      <h3>Plot / ROW boundary</h3>
+      <p className="muted small">
+        Trace compound walls and plot lines first — the land you actually have —
+        then design the street inside them.
+      </p>
+      <div className="tool-row">
+        <button className={boundaryDraw ? 'active' : ''} onClick={() => setBoundaryDraw(!boundaryDraw)}>
+          {boundaryDraw ? 'Click on canvas…' : 'Trace boundary'}
+        </button>
+        {boundaryCount > 0 && <span className="muted small">{boundaryCount} traced</span>}
+      </div>
 
       <h3>Clean</h3>
       <div className="tool-row">
@@ -77,7 +148,16 @@ export function NetworkPanel() {
       </div>
 
       <h3>Dual carriageways</h3>
-      <button onClick={() => scanDualCarriageways()}>Find candidates</button>
+      <div className="tool-row">
+        <button onClick={() => scanDualCarriageways()}>Find candidates</button>
+        <button
+          disabled={selectedEdgeIds.length !== 2}
+          title={selectedEdgeIds.length === 2 ? 'Merge the two selected parallel streets at their midline' : 'Shift-click two parallel streets first'}
+          onClick={() => mergeSelectedAsDc()}
+        >
+          Merge selected (2)
+        </button>
+      </div>
       {dcCandidates && dcCandidates.length === 0 && <p className="muted small">None detected.</p>}
       {dcCandidates?.map((c) => (
         <div
@@ -95,6 +175,27 @@ export function NetworkPanel() {
       ))}
 
       <h3>Validation</h3>
+      {nearPairs.length > 0 && (
+        <>
+          <p className="small issues-inline">
+            ⚠ {nearPairs.length} node pair(s) closer than 2 m — merge them to
+            avoid junction geometry errors later.
+          </p>
+          <ul className="edge-list">
+            {nearPairs.map((p) => (
+              <li key={`${p.a}-${p.b}`} className="row-between small">
+                <button onClick={() => focusNode(p.a)}>
+                  {p.a} ↔ {p.b}
+                  <span className="muted small"> · {p.d.toFixed(2)} m apart</span>
+                </button>
+                <button className="mini" onClick={() => mergeNodePair(p.a, p.b)}>
+                  Merge
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {issues.length === 0 ? (
         <p className="ok small">✓ graph valid — no dangling refs, no zero-length edges</p>
       ) : (
@@ -115,7 +216,10 @@ export function NetworkPanel() {
       <ul className="edge-list">
         {edgeList.map((e) => (
           <li key={e.id}>
-            <button className={e.id === selectedEdgeId ? 'active' : ''} onClick={() => selectEdge(e.id)}>
+            <button
+              className={selectedEdgeIds.includes(e.id) ? 'active' : ''}
+              onClick={(ev) => selectEdge(e.id, ev.shiftKey)}
+            >
               <strong>{e.id}</strong> · {polylineLength(e.points).toFixed(0)} m
               <span className="muted small">
                 {' '}
@@ -127,13 +231,12 @@ export function NetworkPanel() {
           </li>
         ))}
       </ul>
-      {selected && (
-        <button className="danger" onClick={() => removeEdge(selected.id)}>
-          Delete {selected.id}
-          {selected.name ? ` (${selected.name})` : ''}
+      {selectedEdgeIds.length > 0 && (
+        <button className="danger" onClick={() => removeEdges(selectedEdgeIds)}>
+          Delete {selectedEdgeIds.length > 1 ? `${selectedEdgeIds.length} streets` : selectedEdgeIds[0]}
+          {selectedEdgeIds.length === 1 && selected?.name ? ` (${selected.name})` : ''}
         </button>
       )}
-      {statusMsg && <p className="status small">{statusMsg}</p>}
     </div>
   );
 }

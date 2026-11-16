@@ -15,6 +15,10 @@ top-to-bottom once; afterwards each module should be modifiable in isolation.
 - `CLAUDE.md` — working rules. App code in `/app`; docs at root; **all
   geometry in a local metric CRS, lat/lon only at the map boundary**; one
   phase-slice per session.
+- `ROADMAP.md` — what's done, what's next, in what order; contributor
+  extension guide. **Start here to pick up work.**
+- `CAD_Architecture.md` — design for node-level editing of derived geometry
+  (the keyed-vertex layer).
 
 ---
 
@@ -42,6 +46,7 @@ scratch on every graph change**:
 | projection origin (lat/lon of local 0,0)   | transitions between differing sections        |
 | `JunctionDesign` overrides (only if touched)| junction surfaces, fillet arcs, wedges, trims |
 | `StreetElement` anchors (station+component)| element world positions & symbol polygons     |
+| `Patch` polygons (edit stage)              | — drawn verbatim; the manual escape hatch     |
 
 Consequences: there is no invalidation logic anywhere — mutate the graph and
 every artifact regenerates; user overrides survive regeneration because they
@@ -94,6 +99,9 @@ JunctionDesign { type, cornerOverrides:  Record<cornerKey, {radiusM?, chamfer?}>
 StreetElement { kind, edgeId, stationM,      // along the centerline
                 compIndex, t,                // across: component + 0..1 fraction
                 variant?, widthM?, placedBy? }
+
+Patch { kind: ComponentKind | 'cut',         // edit stage: free-form polygon
+        points: number[] }                   // painted material or ground cut
 ```
 
 **Invariants:**
@@ -115,17 +123,23 @@ StreetElement { kind, edgeId, stationM,      // along the centerline
 |---|---|---|
 | `geometry/polyline.ts` | flat-polyline math: length, station point+normal, projection, offset (miter, limit 4), sub-polyline, seg-seg intersection, Douglas-Peucker, point-in-polygon | `pointAtStation`, `projectOnPolyline`, `offsetPolyline`, `subPolyline`, `segSegIntersection`, `ribbonBand` |
 | `geometry/ribbon.ts` | section → band polygons + separator markings (3DStreet pattern: dashed between same drivable kinds, solid otherwise) | `buildRibbon`, `refFraction`, `RibbonBand` |
-| `catalog.ts` | IRC SP:118-2018 cross-section catalog; element-name → `ComponentKind` classifier; kind colors/labels | `CATALOG_BY_ROW`, `getSection`, `KIND_COLORS` |
+| `catalog.ts` | IRC SP:118-2018 cross-section catalog; element-name → `ComponentKind` classifier; kind colors/labels; the **shared DRIVABLE set** (flush-with-carriageway kinds) used by both junction curbs and element placement | `CATALOG_BY_ROW`, `getSection`, `KIND_COLORS`, `DRIVABLE_KINDS` |
 | `sections/rules.ts` | OSM highway class → catalog section auto-assignment + review list | `autoAssignSections`, `materialize` |
 | `sections/transition.ts` | **the blending engine.** Width-weighted LCS over kind tokens (carriageway groups `cw (median cw)*` match as units, so divided↔single merges as a Y); smoothstep band sampler along any path; span resolution (base + overrides + derived transition zones); trimmed edge geometry | `matchComponents`, `sampleTransitionBands`, `buildEdgeGeometry` |
-| `graph/ops.ts` | pure graph operations, one undo step each: draft commit (planarize), split (clips overrides), move/merge/weld/delete, join-through-node, simplify | `commitDraft`, `splitEdge`, `mergeNodes`, `joinThroughNode`, `degree` |
+| `graph/ops.ts` | pure graph operations, one undo step each: draft commit (planarize), split (clips overrides), move/merge/weld/delete, join-through-node (returns a `JoinResult` with reversal/length metadata so the store can re-anchor elements), simplify; shared `graphBounds` (covers edge interior vertices) | `commitDraft`, `splitEdge`, `mergeNodes`, `joinThroughNode`, `graphBounds`, `degree` |
 | `graph/transforms.ts` | osm2streets cleanup pipeline: short→degenerate→short | `runStandardPipeline` |
 | `graph/dualCarriageway.ts` | detect / manually merge parallel oneway pairs into a divided edge (orientation-aware: `bearingDiff > 90°` ⇒ reverse one side) | `detectDualCarriageways`, `mergeDualCarriageway`, `manualDcCandidate` |
-| `graph/junctions.ts` | **the junction engine** (see §6) | `deriveNodeArtifacts` |
-| `detailing/elements.ts` | parametric street furniture: per-kind allowed component lists, drop/drag resolution to the nearest legal band, shared symbol geometry (canvas+SVG), lane dividers, auto-suggestion generators | `resolveDrop`, `elementGraphics`, `laneDividers`, `suggestElements`, `componentSpan`, `drivableSpan` |
-| `export/plan.ts` | whole-design → standalone SVG plan (title block, scale bar, legend) reusing the same derivations as the canvas | `buildPlanSvg`, `planContent` |
-| `osm/overpass.ts` | Overpass import (45 s abort), lat/lon⇄local projection, way parsing/filtering | `fetchOverpass`, `parseOsm`, `toLocal`, `DEFAULT_IMPORT` |
-| `store.ts` | one zustand store for all stages + zundo temporal undo (see §7) | `useCst` |
+| `graph/junctions.ts` | **the junction engine** (see §6) | `deriveNodeArtifactsCached` (single-entry identity cache — canvas, panels, suggestions and export all share one derivation per state change; `deriveNodeArtifacts` is the uncached pure function) |
+| `detailing/elements.ts` | parametric street furniture: per-kind allowed component lists, drop/drag resolution to the nearest legal band, shared symbol geometry (canvas+SVG), lane dividers, auto-suggestion generators, anchor validity (`isElementValid` / `pruneElements` — stale anchors render nothing and are pruned by the store) | `resolveDrop`, `elementGraphics`, `laneDividers`, `suggestElements`, `componentSpan`, `drivableSpan`, `pruneElements` |
+| `export/plan.ts` | whole-design → standalone SVG plan (title block, scale bar, legend) reusing the same derivations as the canvas; split into `planContent` (expensive, design-dependent) + `framePlanSvg` (cheap title-block framing) so title edits don't re-derive the network | `planContent`, `framePlanSvg`, `buildPlanSvg` |
+| `osm/overpass.ts` | Overpass bbox import (45 s abort) with user filters (flyovers/service/paths) + bus-stop layer, lat/lon⇄local projection, way parsing/filtering | `fetchOverpassBbox`, `parseOsm`, `parseBusStops`, `ImportFilters`, `toLocal`, `DEFAULT_IMPORT` |
+| `geometry/spatialIndex.ts` | uniform-grid edge index (CAD P1), memoized per edges-record identity; all hit tests (`findSnap`, `resolveDrop`, node-drag snap) query local candidates only | `edgesNear` |
+| `cad/vertexOverrides.ts` | **CAD keyed-vertex engine** (P3/P4): parametric (along, across) nudges per perimeter-fraction key, re-applied to every regenerated outline; unmatched keys skip (stale, not wrong). Shape keys: `band:{edgeId}:{bandKey}`, `jring:{jKey}`, `jband:{jKey}:{bandKey}` | `applyShapeOverrides`, `deltaForDrag`, `vertexFractions` |
+| `cad/mesh.ts` | **welded node-mesh** (`Mesh_Architecture.md`): coincident vertices of abutting generated shapes form shared nodes; a drag writes one delta per member shape (single undo step) so sub-polygons reshape together and never tear | `weldMapFor`, `weldedDragDeltas` |
+| `persistence.ts` | versioned `.cst.json` document (= the decision slice), structural validation with forward-compatible defaults, debounced localStorage autosave + restore | `toDocument`, `fromDocument`, `downloadDocument`, `readAutosave` |
+| `scene3d/buildScene.ts` | **3D scaffold**: same derived design → renderer-agnostic `SceneSpec` (extruded prisms with IRC kerb heights + tree/light posts); vertex overrides applied for 2D/3D parity | `buildScene` |
+| `components/Scene3D.tsx` | lazy three.js viewer of the SceneSpec (orbit camera, sun/sky, ground); loads as its own chunk on first open of the header "3D" button | default export |
+| `store.ts` | one zustand store for all stages + zundo temporal undo (see §7); also boundaries (traced plot/ROW polylines), vertexOverrides, busStops, importFilters | `useCst` |
 | `components/CanvasStage.tsx` | the canvas: view/camera, all Konva layers, draw/snap, marquee/lasso, drag interactions, hover cursors, floating canvas chrome | `CanvasStage` |
 | `components/FloatingUI.tsx` | stage rail, tool rail, basemap FAB, scale bar, compass | |
 | `components/*Panel.tsx`, `StripEditor.tsx` | per-stage panels; StripEditor = bottom-sheet cross-section editor (widths, add/remove, flip, draggable refM arrow with snapping) | |
@@ -193,6 +207,18 @@ One zustand store (`useCst`) wrapped in `zundo`'s `temporal`:
   fit; `CanvasStage` consumes and clears it.
 - Dev handle: `window.__cst = useCst` (DEV only) — the Playwright drives
   depend on it.
+- **Undo must go through `store.undo()/redo()`**, never
+  `useCst.temporal` directly: the wrappers re-validate volatile selections
+  (`pruneSelections`) against the restored snapshot so
+  `selectedEdgeIds`/`selectedElementId`/`selectedJunctionKey` never dangle.
+- **Element anchor lifecycle**: graph mutations keep `elements` honest —
+  `splitEdgeAt`/`weldNodeToEdge` re-anchor stations across the split halves,
+  `removeNodeSmart`'s degree-2 heal remaps stations/sides across the join
+  (mirroring `compIndex`/`t` when an edge reverses), `flipSection` mirrors
+  anchors with the section, and destructive ops (`removeEdges`, `deleteNode`,
+  `cleanNetwork`, DC merge) call `pruneElements`. Imports clear
+  `elements`/`junctionDesigns`/selections entirely — edge ids are recycled
+  (`e1…`), so stale anchors would silently rebind to unrelated streets.
 
 Actions are grouped by domain: graph ops (delegate to `graph/ops.ts`),
 section ops (materialize catalog copies — **copy-on-write**, edits never
@@ -220,6 +246,40 @@ DetailingLayer                   lane dividers + element symbols; drag re-
 overlay layer                    draft polyline, snap ring, marquee/lasso
 ```
 
+### Rendering performance model (do not regress)
+
+Measured on the dense benchmark (sample network + sections + every
+auto-suggestion ≈ 1,200 elements): full-scene draw went **1,528 ms → ~12 ms**
+and pan from 1.8 fps to frame rate by layering four rules — all live in
+`CanvasStage.tsx` (constants at the top):
+
+1. **LOD (`DETAIL_SCALE`, px/m):** below it, sub-pixel detail is *not
+   mounted* — ribbon separator markings, lane dividers, point furniture and
+   turn arrows, band/wedge hairline strokes. Crossings, driveways, band and
+   junction fills always render (they are the plan). Dashed strokes are the
+   single most expensive canvas primitive — never add an always-on dashed
+   layer without an LOD gate.
+2. **Viewport culling:** above `CULL_MIN_EDGES`, only edges/nodes/elements/
+   junction artifacts inside the padded view rect are mounted
+   (`spatialIndex.edgesInRect`). The cull rect is **quantized** to
+   quarter-viewport pan steps and half-octave zoom buckets so the culled
+   arrays keep identity during a drag — otherwise every frame reconciles
+   every Konva node. Padding (`CULL_PAD`) covers the quantization slack.
+   Derivation (`deriveNodeArtifactsCached`) is never culled — trims must stay
+   complete; only the *rendered* artifact view is filtered.
+3. **React off the pointer path:** the coords pill updates via a ref
+   (`textContent`), `setCursor` state only flows while a drawing preview is
+   live, and stage-drag → `setView` is rAF-throttled (Konva moves the stage
+   natively; React only feeds the basemap + culling).
+4. **Konva hygiene:** `perfectDrawEnabled={false}` on every fill shape,
+   `listening` scoped per stage (a listening shape is drawn twice — scene +
+   hit canvas), `strokeScaleEnabled` strokes skipped entirely below LOD.
+
+Benchmark before touching any of this: `scratchpad perf-bench` pattern —
+count `stage.find('Shape')`, time 20 × `stage.draw()`, and rAF-count a real
+mouse-drag. Remaining known cost: MapLibre re-render per pan frame is ~free
+on GPUs but dominates under software GL (headless containers).
+
 Interaction notes (hard-won — do not "simplify" these away):
 - **Konva synthesizes dblclick** from any two clicks within its time window
   regardless of distance. Draw-finish therefore requires the last two draft
@@ -240,26 +300,43 @@ Interaction notes (hard-won — do not "simplify" these away):
 
 ## 9. UI shell (`App.tsx`, `FloatingUI.tsx`)
 
-- Slim header: brand, Nominatim geocode search, design-opacity slider,
-  undo/redo.
+- Slim header: brand, **standard tool toolbar** (Selection ➤, Direct ▷ —
+  moves nodes/vertices, Rect, Lasso, Draw, Split; draw/split disable outside
+  the network stage), Nominatim geocode search, design-opacity slider,
+  undo/redo. Stage panels carry only their domain-specific choices.
 - **Stage rail** (left edge, vertical): Network → Street → Junction →
-  Detail → Export. Clicking the active stage toggles the **floating panel**
-  beside the rail (`panelOpen` is App-local state).
-- **Tool rail** below it, contextual: select/marquee/lasso everywhere,
-  draw (network), split (network+sections); hidden in export.
+  Detail → **Edit** → Export. Clicking the active stage toggles the
+  **floating panel** beside the rail (`panelOpen` is App-local state).
+- **Edit stage**: free-form patches — pick a material (or 'cut'), click
+  vertices, Enter/double-click closes; vertices drag, right-click removes.
+  Patches render above the derived design and export with the plan.
+- **Section multi-apply**: catalog clicks apply to every selected street
+  (`assignSectionToSelected`, one undo step).
+- **OSM import by area**: draw a bbox on the canvas (live size/area readout,
+  capped at 3 km²), confirm → exact-extent Overpass query re-anchored at the
+  box centre. **Export extent**: draw a crop box; the plan frame clips to it.
 - Bottom-left: basemap FAB (none/OSM/satellite) + reactive scale bar
   (1/2/5×10^k m targeting ~90 px). Top-right: compass (north-up; click =
   fit). Bottom-center: hint pill. Bottom-right: cursor coordinates.
 - **Keyboard map** (window listener in `App.tsx`, skipped when typing):
-  `1–5` stages · `V/M/L/D/X` tools · `F` fit · `P` panel toggle ·
-  `Ctrl+A` select all · `Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y` undo/redo ·
-  `Enter` finish draft · `Esc` cancel-chain (draft → place tool → tool →
-  element sel → junction sel → edge sel) · `Delete` remove selection.
+  `1–6` stages · `V/A/M/L/D/X` tools (A = Direct) · `F` fit · `P` panel
+  toggle · `Ctrl+A` select all · `Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y` undo/redo ·
+  `Enter` finish draft/patch · `Esc` cancel-chain (box draw → draft → patch →
+  place tool → tool → selections) · `Delete` removes patch/element/edges.
 
-## 10. Verification workflow (no unit tests — drive the real app)
+## 10. Verification workflow (vitest + drive the real app)
 
-Playwright scripts live in the session scratchpad (not committed) and drive a
-dev server on **port 5199**:
+Unit tests: `npm test` (vitest) covers the pure engine — `graph/ops.test.ts`
+(commitDraft planarity incl. the snap-after-split regression, self-loop
+guards, join metadata, graphBounds), `graph/transforms.test.ts` (short-edge
+collapse never leaves self-loops, divided/undivided splice guard, DC-merge
+shared-endpoint guard), `sections/transition.test.ts` (matcher symmetry,
+Y-merge, flip continuity). Add a regression test with every engine bug fix.
+
+Playwright drives the real app for everything interactive:
+
+Scripts live in the session scratchpad (not committed) and target a dev
+server on **port 5199**:
 
 ```js
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium' });
@@ -305,6 +382,13 @@ Rules learned the hard way:
 6. **`refM` re-anchoring**: resizing components to the LEFT of the reference
    line shifts the whole street sideways (refM is metres from the left edge).
    Deliberate for now; flagged in StripEditor work.
+7. **Known debt** (reviewed, deliberately deferred): cumulative
+   component-offset math exists in three specialized forms (`buildApproach`,
+   `componentSpan`/`drivableSpan`, `buildRibbon`) — unify only with care, the
+   reversal/fallback semantics differ; `commitDraft`'s internal splits drop
+   elements via pruning rather than re-anchoring; no spatial index yet for
+   `findSnap`/`resolveDrop` (fine ≤ ~200 edges); junction-handle drags stash
+   their baseline on Konva nodes via `setAttr('dragFrom')`.
 
 ## 12. Roadmap (agreed, not yet built)
 
