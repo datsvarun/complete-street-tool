@@ -14,6 +14,23 @@ import {
 
 export const EMPTY_GRAPH: GraphState = { nodes: {}, edges: {}, nextNodeNum: 1, nextEdgeNum: 1 };
 
+export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
+
+/** Bounding box over every edge vertex (not just nodes — curved edges bulge
+ *  past their endpoints). Falls back to nodes for edge-less graphs. */
+export function graphBounds(g: GraphState): Bounds | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const take = (x: number, y: number) => {
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+  };
+  for (const e of Object.values(g.edges)) {
+    for (let i = 0; i + 1 < e.points.length; i += 2) take(e.points[i], e.points[i + 1]);
+  }
+  for (const n of Object.values(g.nodes)) take(n.x, n.y);
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
+
 function clone(g: GraphState): GraphState {
   return { ...g, nodes: { ...g.nodes }, edges: { ...g.edges } };
 }
@@ -81,9 +98,20 @@ export function splitEdge(
   const ptsB = [proj.x, proj.y, ...e.points.slice(i + 2)];
   const base = { section: e.section, highway: e.highway, name: e.name, oneway: e.oneway,
     carriagewayType: e.carriagewayType, medianWidth: e.medianWidth };
+  // Station-anchored overrides re-anchor into whichever half they fall in.
+  const clipOverrides = (s0: number, s1: number) =>
+    (e.overrides ?? [])
+      .map((o) => ({
+        ...o,
+        fromM: Math.max(o.fromM, s0) - s0,
+        toM: Math.min(o.toM, s1) - s0,
+      }))
+      .filter((o) => o.toM - o.fromM > 3);
+  const ovA = clipOverrides(0, proj.station);
+  const ovB = clipOverrides(proj.station, total);
   delete g.edges[edgeId];
-  addEdge(g, { ...base, a: e.a, b: nodeId, points: ptsA });
-  addEdge(g, { ...base, a: nodeId, b: e.b, points: ptsB });
+  addEdge(g, { ...base, a: e.a, b: nodeId, points: ptsA, overrides: ovA.length ? ovA : undefined });
+  addEdge(g, { ...base, a: nodeId, b: e.b, points: ptsB, overrides: ovB.length ? ovB : undefined });
   return { g, nodeId };
 }
 
@@ -128,6 +156,90 @@ export function deleteEdge(g0: GraphState, edgeId: string): GraphState {
     if (g.nodes[nid] && degree(g, nid) === 0) delete g.nodes[nid];
   }
   return g;
+}
+
+/** Move an interior vertex of an edge polyline (endpoints belong to nodes). */
+export function moveEdgeVertex(g0: GraphState, edgeId: string, idx: number, x: number, y: number): GraphState {
+  const e = g0.edges[edgeId];
+  const n = e ? e.points.length / 2 : 0;
+  if (!e || idx <= 0 || idx >= n - 1) return g0;
+  const g = clone(g0);
+  const pts = e.points.slice();
+  pts[idx * 2] = x;
+  pts[idx * 2 + 1] = y;
+  g.edges[edgeId] = { ...e, points: pts };
+  return g;
+}
+
+/** Remove an interior vertex of an edge polyline. */
+export function removeEdgeVertex(g0: GraphState, edgeId: string, idx: number): GraphState {
+  const e = g0.edges[edgeId];
+  const n = e ? e.points.length / 2 : 0;
+  if (!e || idx <= 0 || idx >= n - 1) return g0;
+  const g = clone(g0);
+  const pts = e.points.slice();
+  pts.splice(idx * 2, 2);
+  g.edges[edgeId] = { ...e, points: pts };
+  return g;
+}
+
+/**
+ * Remove a degree-2 node by joining its two edges into one straight-through
+ * edge (the bend disappears). Returns null when the node isn't healable.
+ */
+export interface JoinResult {
+  g: GraphState;
+  keptId: string;   // surviving edge id (was e1)
+  dropId: string;   // removed edge id
+  len1: number;     // length of e1 before the join
+  len2: number;
+  e1Reversed: boolean; // e1 was flipped to end at the node
+  e2Reversed: boolean;
+}
+
+export function joinThroughNode(g0: GraphState, nodeId: string): JoinResult | null {
+  const around = edgesAt(g0, nodeId);
+  if (around.length !== 2 || around[0].id === around[1].id) return null;
+  const [e1, e2] = around;
+  // A self-loop at the node would leave the joined edge referencing the
+  // deleted node — not healable.
+  if (e1.a === e1.b || e2.a === e2.b) return null;
+  const otherEnd = (e: StreetEdge) => (e.a === nodeId ? e.b : e.a);
+
+  // e1 oriented to END at the node, e2 to START at it.
+  const p1 = e1.b === nodeId ? e1.points : reverseFlat(e1.points);
+  const p2 = e2.a === nodeId ? e2.points : reverseFlat(e2.points);
+  const e1Reversed = e1.b !== nodeId;
+  const e2Reversed = e2.a !== nodeId;
+  const joined: StreetEdge = {
+    ...e1,
+    a: otherEnd(e1),
+    b: otherEnd(e2),
+    points: [...p1, ...p2.slice(2)],
+    // Direction semantics survive only if neither edge had to flip.
+    oneway: !!e1.oneway && !!e2.oneway && !e1Reversed && !e2Reversed,
+    overrides: undefined, // station anchors don't survive the splice
+  };
+  if (joined.a === joined.b) return null; // would collapse to a loop
+  const g = clone(g0);
+  delete g.edges[e2.id];
+  g.edges[e1.id] = joined;
+  delete g.nodes[nodeId];
+  return {
+    g,
+    keptId: e1.id,
+    dropId: e2.id,
+    len1: polylineLength(e1.points),
+    len2: polylineLength(e2.points),
+    e1Reversed,
+    e2Reversed,
+  };
+}
+
+function reverseFlat(flat: number[]): number[] {
+  const out: number[] = [];
+  for (let i = flat.length - 2; i >= 0; i -= 2) out.push(flat[i], flat[i + 1]);
+  return out;
 }
 
 /** Delete a node and every edge touching it (orphan cleanup included). */
@@ -184,9 +296,22 @@ export function commitDraft(
       return { x: n.x, y: n.y, nodeId: n.id };
     }
     if (v.snap?.type === 'edge') {
-      const res = g.edges[v.snap.id]
-        ? splitEdge(g, v.snap.id, v.x, v.y, tol)
-        : { g, nodeId: null };
+      // The snapped edge may have been split by an EARLIER vertex of this
+      // same draft (its id is gone). Re-resolve against the current graph —
+      // falling through would create a disconnected node sitting on the
+      // street and break planarity.
+      let targetId: string | null = g.edges[v.snap.id] ? v.snap.id : null;
+      if (!targetId) {
+        let bestD = 1.5;
+        for (const e of Object.values(g.edges)) {
+          const proj = projectOnPolyline(e.points, v.x, v.y);
+          if (proj && proj.dist < bestD) {
+            bestD = proj.dist;
+            targetId = e.id;
+          }
+        }
+      }
+      const res = targetId ? splitEdge(g, targetId, v.x, v.y, tol) : { g, nodeId: null };
       if (res.nodeId) {
         g = res.g;
         const n = g.nodes[res.nodeId];

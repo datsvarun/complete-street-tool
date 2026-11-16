@@ -36,19 +36,21 @@ export const COMPONENT_MINS: Partial<Record<ComponentKind, { minM: number; sourc
   service: { minM: 3.0, source: 'IRC SP:118-2018 (verify)' },
 };
 
-/** Palette defaults when adding a component in the strip editor. */
+/** Palette when adding or swapping a component in the strip editor.
+ *  (MFZ + Bus Stop/MFZ merged into MUZ; Tree Line → Green Buffer;
+ *  mixed lane → Bus lane — user's kind consolidation.) */
 export const COMPONENT_DEFAULTS: Array<{ kind: ComponentKind; element: string; widthM: number }> = [
   { kind: 'footpath', element: 'Footpath', widthM: 2.5 },
   { kind: 'carriageway', element: 'Carriageway', widthM: 3.5 },
-  { kind: 'mixed', element: 'Mixed traffic lane', widthM: 3.5 },
+  { kind: 'mixed', element: 'Bus lane', widthM: 3.5 },
   { kind: 'cycle', element: 'Cycle Track', widthM: 2.0 },
-  { kind: 'muz', element: 'MUZ', widthM: 1.5 },
-  { kind: 'mfz', element: 'MFZ', widthM: 2.0 },
+  { kind: 'muz', element: 'MUZ', widthM: 2.0 },
   { kind: 'buffer', element: 'Buffer', widthM: 1.0 },
   { kind: 'median', element: 'Median', widthM: 1.0 },
   { kind: 'parking', element: 'Parking', widthM: 2.0 },
-  { kind: 'tree', element: 'Tree Line', widthM: 1.5 },
-  { kind: 'busstop', element: 'Bus Stop / MFZ', widthM: 2.0 },
+  { kind: 'tree', element: 'Green Buffer', widthM: 1.5 },
+  { kind: 'service', element: 'Service lane', widthM: 3.0 },
+  { kind: 'brt', element: 'BRT corridor', widthM: 3.5 },
 ];
 
 export const WIDTH_MIN = 0.3;
@@ -69,6 +71,12 @@ export function materialize(section: CrossSection): EdgeSection {
   };
 }
 
+/** Preferred configuration within a ROW group (by catalog name) when the
+ *  default would otherwise be the group's first entry. */
+const ROW_PREFERRED: Record<number, RegExp> = {
+  12: /mixed street \(2\)/i, // regular OSM streets → 12 m ROW Mixed street (2)
+};
+
 function pickSectionForRow(rowM: number, preferMedian: boolean): CrossSection | null {
   const group = CATALOG.filter((s) => s.rowWidthM === rowM);
   if (group.length === 0) return null;
@@ -76,7 +84,8 @@ function pickSectionForRow(rowM: number, preferMedian: boolean): CrossSection | 
     const withMedian = group.find((s) => s.components.some((c) => c.kind === 'median'));
     if (withMedian) return withMedian;
   }
-  return group[0];
+  const preferred = ROW_PREFERRED[rowM] && group.find((s) => ROW_PREFERRED[rowM].test(s.name));
+  return preferred || group[0];
 }
 
 export interface AutoAssignResult {
